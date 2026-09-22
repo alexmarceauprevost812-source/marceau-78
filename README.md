@@ -283,6 +283,70 @@ support d'outils répondra quand même, mais sans se servir du projet.
 `Access-Control-Allow-Origin: *`, faque le navigateur l'appelle directement :
 le serveur du site ne voit ni ton token, ni ton code.
 
+## Le Studio : les images
+
+Le bouton **+ Image** sous la boîte joint jusqu'à 4 images à ta question
+(PNG, JPEG, WebP, GIF, BMP, TIFF). Une petite vignette s'affiche à côté du
+bouton, avec un **×** pour l'enlever. Envoyer une image sans rien écrire
+marche : la question devient « Regarde mon image. »
+
+Les images sont copiées dans `~/.local/share/ecriture/images/`, et ce sont ces
+copies que la conversation retient — rouvrir une conversation les remontre.
+
+### Qui voit quoi
+
+| Moteur | Voit l'image ? |
+| --- | --- |
+| Claude (tous les modèles) | oui |
+| Ollama : `gemma3`, `llava`, `moondream`, `minicpm-v`, `qwen2-vl`… | oui, détecté par `/api/show` |
+| Les autres modèles locaux | non — l'app le dit, et propose `ollama pull gemma3` |
+
+Une IA qui ne voit pas les images peut quand même les **modifier** : le Studio
+travaille sur l'image, pas sur ce que l'IA en perçoit. Seules les 3 dernières
+images de la conversation partent à l'IA, redimensionnées à 1568 px au plus.
+
+### Modifier une image
+
+Quand tu demandes un changement, l'assistant termine sa réponse par un bloc
+que l'app exécute elle-même avec Pillow :
+
+```
+[STUDIO]
+noir_et_blanc
+contraste 1.3
+texte "Bonne fête!" bas blanc
+[/STUDIO]
+```
+
+Les opérations, une par ligne, dans l'ordre : `luminosite X`, `contraste X`,
+`saturation X`, `nettete X`, `noir_et_blanc`, `sepia`, `inverser`, `flou X`,
+`rotation X`, `miroir`, `miroir_vertical`, `recadrer G H D B`, `carre`,
+`taille L`, `texte "…" haut|centre|bas couleur`, `bordure N couleur`,
+`vignette X`, `chaud`, `froid`, `pixeliser N`, `posteriser N`.
+
+La lecture est tolérante : `noir et blanc`, `Noir-Et-Blanc` et `noir_et_blanc`
+donnent la même chose, et pour les quatre réglages d'intensité un nombre signé
+ou en pourcentage (`contraste +35`, `luminosite -20 %`) se lit comme un écart,
+pas comme un facteur. Une opération qu'on ne comprend pas est sautée sans
+empêcher les autres.
+
+Le résultat s'affiche dans une carte **Studio** qui s'ouvre en glissant :
+l'image, la liste de ce qui a été fait, un bouton **Voir l'avant / Voir
+l'après**, **Enregistrer** (sur l'ordi) et **Mettre dans le Codex**. Chaque
+modification part de l'image précédente : on peut enchaîner les demandes.
+
+### Les images dans le Codex
+
+Le Codex a le même bouton **+ Image** sous sa boîte, et un **+ Image** dans la
+barre de l'éditeur pour prendre une image de ton ordi. Ouvrir une image du
+projet l'affiche au lieu d'essayer de la lire comme du texte. Pour mettre une
+image jointe dans le projet, l'assistant écrit une ligne
+`[IMAGE 1 images/logo.png]` ; elle part sur GitHub en binaire avec
+**Enregistrer**, comme n'importe quel autre fichier.
+
+Sans Pillow (`pip install pillow`), tout le reste de l'app marche pareil : les
+boutons d'image expliquent simplement ce qu'il manque.
+
 ## Les schémas de plan
 
 Quand la réponse décrit des étapes à suivre, elles sont redessinées sous la

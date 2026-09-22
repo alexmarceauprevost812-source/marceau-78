@@ -9,6 +9,7 @@
 import base64
 import datetime
 import difflib
+import io
 import json
 import math
 import os
@@ -27,10 +28,10 @@ from bisect import bisect_right
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-try:   # Pillow rend le logo plus doux quand il change de taille (optionnel)
-    from PIL import Image, ImageTk
+try:   # Pillow : le logo, pis tout le Studio d'images (optionnel)
+    from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageTk
 except ImportError:
-    Image = ImageTk = None
+    Image = ImageTk = ImageDraw = ImageEnhance = ImageFilter = ImageFont = ImageOps = None
 
 # ---------- Couleurs & style (change-les ici) ----------
 GRIS_FOND = "#8c8c8c"      # fond gris mat
@@ -114,12 +115,13 @@ FICHIER_CLE = DOSSIER_CONFIG / "cle_api"
 FICHIER_TOKEN = DOSSIER_CONFIG / "github_token"
 FICHIER_REGLAGES = DOSSIER_CONFIG / "reglages.json"   # ta ville pour la météo
 DOSSIER_SESSIONS = Path.home() / ".local" / "share" / "ecriture" / "sessions"
+DOSSIER_IMAGES = Path.home() / ".local" / "share" / "ecriture" / "images"
 FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'auto
 
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
@@ -180,6 +182,20 @@ def instructions_systeme(web):
         "(sites officiels, documentation), seulement si tu es sûr qu'ils existent. "
     )
     texte += (
+        "Pouvoir spécial, le Studio : la personne peut partager des images. Si elle te demande de "
+        "modifier une image (plus claire, noir et blanc, recadrer, tourner, ajouter du texte, un "
+        "filtre…), explique en une phrase ce que tu fais pis termine par un bloc comme :\n"
+        "[STUDIO]\nluminosite 1.2\ntexte \"Bonne fête!\" bas blanc\n[/STUDIO]\n"
+        "Opérations possibles, une par ligne, dans l'ordre où les faire : luminosite X, contraste X, "
+        "saturation X (0 = noir et blanc, 2 = couleurs vives), nettete X (1 = pareil), noir_et_blanc, "
+        "sepia, inverser, flou X (pixels), rotation X (degrés : 90 = vers la gauche, -90 = vers la "
+        "droite), miroir, miroir_vertical, recadrer G H D B (pourcentages à enlever à gauche, en "
+        "haut, à droite, en bas), carre, taille L (largeur en pixels), texte \"…\" haut|centre|bas "
+        "couleur, bordure N couleur, vignette X (0 à 1), chaud, froid, pixeliser N, posteriser N. "
+        "Les modifications se font sur la dernière image de la conversation. Si on te pose juste "
+        "une question sur une image, réponds sans bloc. "
+    )
+    texte += (
         "Quand ta réponse explique un plan d'action ou des étapes à suivre, termine-la "
         "par un bloc exactement comme celui-ci (une étape courte par ligne, moins de 12 mots) :\n"
         "[PLAN]\n1. Première étape\n2. Deuxième étape\n[/PLAN]\n"
@@ -201,7 +217,10 @@ def instructions_codex():
         "et pourquoi, en texte brut sans Markdown. Touche seulement aux fichiers nécessaires. "
         "Si on te pose juste une question, réponds sans bloc. "
         "Si tu dois voir d'autres fichiers du projet avant de les modifier, réponds seulement avec "
-        "un bloc [LIRE] qui liste leurs chemins (un par ligne), terminé par [/LIRE]."
+        "un bloc [LIRE] qui liste leurs chemins (un par ligne), terminé par [/LIRE]. "
+        "Des images peuvent être jointes à la demande (image 1, image 2…). Pour mettre une image "
+        "jointe dans le projet, écris une ligne comme [IMAGE 1 images/logo.png] (le numéro de "
+        "l'image, puis son chemin dans le projet)."
     )
 
 
@@ -306,10 +325,16 @@ def trouver_moteurs():
 
 
 def appeler_ollama(modele, messages, systeme, num_ctx=None):
+    envoi = []
+    for m in messages:
+        message = {"role": m["role"], "content": m["content"]}
+        if m.get("images"):
+            message["images"] = [i["data"] for i in m["images"]]   # les modèles qui voient (llava, gemma3…)
+        envoi.append(message)
     corps = {
         "model": modele,
         "stream": False,
-        "messages": [{"role": "system", "content": systeme}] + messages,
+        "messages": [{"role": "system", "content": systeme}] + envoi,
     }
     if num_ctx:
         corps["options"] = {"num_ctx": num_ctx}
@@ -327,7 +352,15 @@ def appeler_ollama(modele, messages, systeme, num_ctx=None):
 # ---------- Claude (payant, avec recherche web) ----------
 def appeler_claude(cle, messages, systeme, web=True, max_tokens=2048, timeout=180,
                    modele=None):
-    conversation = list(messages)
+    conversation = []
+    for m in messages:
+        if m.get("images"):   # Claude voit les images : on les met avant le texte
+            contenu = [{"type": "image", "source": {"type": "base64", "media_type": i["media_type"],
+                                                    "data": i["data"]}} for i in m["images"]]
+            contenu.append({"type": "text", "text": m["content"] or "Regarde l'image."})
+            conversation.append({"role": m["role"], "content": contenu})
+        else:
+            conversation.append({"role": m["role"], "content": m["content"]})
     morceaux, sources = [], []
     for _ in range(5):
         corps = {
@@ -426,6 +459,12 @@ def lire_blob(depot, sha, token):
     return base64.b64decode(data["content"]).decode("utf-8").replace("\r\n", "\n")
 
 
+def lire_blob_octets(depot, sha, token):
+    """Lit un fichier du projet tel quel (images, etc.)."""
+    data = github("GET", f"/repos/{depot}/git/blobs/{sha}", token)
+    return base64.b64decode(data["content"])
+
+
 def erreur_github(err):
     if isinstance(err, urllib.error.HTTPError):
         if err.code == 401:
@@ -472,6 +511,7 @@ def extraire_fichiers(texte):
                          flags=re.S | re.I)
     explication = re.sub(r"\[PLAN\].*?(\[/PLAN\]|$)", "", explication, flags=re.S | re.I)
     explication = re.sub(r"\[LIRE\].*?(\[/LIRE\]|$)", "", explication, flags=re.S | re.I)
+    explication = re.sub(r"\[IMAGE\s+\d+[^\]\n]*\]", "", explication, flags=re.I)
     return explication.strip(), fichiers
 
 
@@ -1065,7 +1105,8 @@ def contexte_codex(depot, branche, arbre, fichiers, budget):
     return "\n\n".join(parties), inclus
 
 
-def agent_codex(question, historique, onglets, cache, arbre, depot, branche, token, budget, ia, progres):
+def agent_codex(question, historique, onglets, cache, arbre, depot, branche, token, budget, ia, progres,
+                images=()):
     """Roule dans un fil à part. Choisit les fichiers, les lit sur GitHub, pis demande le code à l'IA.
     Retourne {"texte": réponse de l'IA, "lus": fichiers lus sur GitHub, "vus": fichiers montrés à l'IA}."""
     connus = dict(cache)
@@ -1104,6 +1145,8 @@ def agent_codex(question, historique, onglets, cache, arbre, depot, branche, tok
         contexte, vus = contexte_codex(depot, branche, arbre, fichiers, budget)
         envoi = [dict(m) for m in historique]
         envoi[-1]["content"] = contexte + "\n\nDemande : " + question
+        if images:
+            envoi[-1]["images"] = list(images)   # Codex voit les images jointes
         progres("Codex écrit le code")
         texte = ia(envoi, instructions_codex(), 16000)
         # L'IA peut demander d'autres fichiers avant d'écrire : on les lit pis on recommence une fois
@@ -1114,6 +1157,413 @@ def agent_codex(question, historique, onglets, cache, arbre, depot, branche, tok
             continue
         break
     return {"texte": texte, "lus": lus, "vus": vus}
+
+
+# ---------- Images : pièces jointes, pouvoir de voir, pis le Studio ----------
+EXT_IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+TYPES_IMAGES = [("Images", "*.png *.jpg *.jpeg *.gif *.webp *.bmp *.PNG *.JPG *.JPEG"),
+                ("Tous les fichiers", "*.*")]
+MESSAGE_PILLOW = "Pour les images, installe Pillow :\nsudo apt install python3-pil python3-pil.imagetk"
+COULEURS_NOMS = {"blanc": "#ffffff", "noir": "#000000", "rouge": "#ff3b30", "orange": ORANGE,
+                 "jaune": "#ffd60a", "vert": "#34c759", "bleu": "#0a84ff", "violet": "#8e44ad",
+                 "mauve": "#b57edc", "rose": "#ff6fae", "gris": "#8e8e93", "brun": "#8b5a2b",
+                 "or": "#d4af37", "lime": LIME, "turquoise": "#1abc9c"}
+POLICES_TEXTE = ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                 "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", "DejaVuSans-Bold.ttf"]
+
+
+def ouvrir_image(source):
+    """Ouvre une image (chemin ou octets), tournée comme il faut, en RGB ou RGBA."""
+    img = Image.open(io.BytesIO(source) if isinstance(source, bytes) else source)
+    img = ImageOps.exif_transpose(img)
+    if getattr(img, "is_animated", False):
+        img.seek(0)
+    transparente = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+    return img.convert("RGBA" if transparente else "RGB")
+
+
+def garder_image(img, prefixe="image"):
+    """Garde une copie de l'image dans ~/.local/share/ecriture/images (pour les conversations)."""
+    DOSSIER_IMAGES.mkdir(parents=True, exist_ok=True)
+    copie = img.copy()
+    copie.thumbnail((2560, 2560))
+    nom = f"{prefixe}-{datetime.datetime.now():%Y%m%d-%H%M%S-%f}"
+    if copie.mode == "RGBA":
+        chemin = DOSSIER_IMAGES / f"{nom}.png"
+        copie.save(chemin, "PNG")
+    else:
+        chemin = DOSSIER_IMAGES / f"{nom}.jpg"
+        copie.save(chemin, "JPEG", quality=92)
+    return str(chemin)
+
+
+def image_pour_ia(img):
+    """Prépare une image pour que l'IA la voie (pas plus de 1568 px, comme Claude le recommande)."""
+    copie = img.copy()
+    copie.thumbnail((1568, 1568))
+    tampon = io.BytesIO()
+    if copie.mode == "RGBA":
+        copie.save(tampon, "PNG", optimize=True)
+        type_media = "image/png"
+    if copie.mode != "RGBA" or tampon.tell() > 3_500_000:
+        tampon = io.BytesIO()
+        copie.convert("RGB").save(tampon, "JPEG", quality=88)
+        type_media = "image/jpeg"
+    return {"media_type": type_media, "data": base64.b64encode(tampon.getvalue()).decode("ascii")}
+
+
+def octets_pour(chemin, img):
+    """Convertit une image dans le format de son nom de fichier (.png, .jpg, .webp…)."""
+    ext = Path(chemin).suffix.lower()
+    tampon = io.BytesIO()
+    if ext in (".jpg", ".jpeg"):
+        img.convert("RGB").save(tampon, "JPEG", quality=90)
+    elif ext == ".webp":
+        img.save(tampon, "WEBP", quality=90)
+    elif ext == ".gif":
+        img.convert("P", palette=Image.Palette.ADAPTIVE).save(tampon, "GIF")
+    elif ext == ".bmp":
+        img.convert("RGB").save(tampon, "BMP")
+    else:
+        img.save(tampon, "PNG", optimize=True)
+    return tampon.getvalue()
+
+
+def vignette_tk(img, largeur, hauteur):
+    copie = img.copy()
+    copie.thumbnail((largeur, hauteur))
+    return ImageTk.PhotoImage(copie)
+
+
+_VISION = {}
+
+
+def modele_voit_images(modele):
+    """Demande à Ollama si ce modèle voit les images (llava, llama3.2-vision, gemma3…)."""
+    if modele not in _VISION:
+        try:
+            requete = urllib.request.Request(
+                URL_OLLAMA + "/api/show", data=json.dumps({"model": modele}).encode("utf-8"),
+                method="POST", headers={"content-type": "application/json"})
+            with urllib.request.urlopen(requete, timeout=5) as rep:
+                data = json.loads(rep.read().decode("utf-8"))
+            capacites = data.get("capabilities")
+            if capacites is not None:
+                _VISION[modele] = "vision" in capacites
+            else:   # vieux Ollama : on regarde la famille du modèle
+                familles = " ".join((data.get("details") or {}).get("families") or []).lower()
+                _VISION[modele] = "projector_info" in data or any(k in familles for k in ("clip", "mllama"))
+        except Exception:
+            _VISION[modele] = True   # on le sait pas : on essaie quand même
+    return _VISION[modele]
+
+
+def preparer_historique(historique, voit):
+    """Ajoute les vraies images aux messages (juste les 3 derniers messages avec images)."""
+    resultat = [dict(m) for m in historique]
+    avec_images = [i for i, m in enumerate(resultat) if m.get("images_chemins")]
+    garder = set(avec_images[-3:])
+    for i, m in enumerate(resultat):
+        chemins = m.pop("images_chemins", None)
+        if not chemins:
+            continue
+        if voit and i in garder and Image is not None:
+            images = []
+            for chemin in chemins:
+                try:
+                    images.append(image_pour_ia(ouvrir_image(chemin)))
+                except Exception:
+                    pass
+            if images:
+                m["images"] = images
+                continue
+        note = ("(La personne a joint une image que tu ne peux pas voir. Tu peux quand même la "
+                "modifier avec le Studio.)" if not voit else "(Une image avait été jointe ici.)")
+        m["content"] = (m["content"] + "\n" if m["content"] else "") + note
+    return resultat
+
+
+# ----- Le Studio : les modifications d'image -----
+def extraire_studio(texte):
+    """Sort le bloc [STUDIO]…[/STUDIO]. Retourne (texte sans le bloc, liste d'opérations)."""
+    m = re.search(r"\[STUDIO\](.*?)(?:\[/STUDIO\]|$)", texte, re.S | re.I)
+    if not m:
+        return texte, []
+    operations = [l.strip() for l in m.group(1).splitlines() if l.strip()]
+    return (texte[:m.start()] + texte[m.end():]).strip(), operations
+
+
+def couleur_dans(mots, defaut):
+    for mot in mots:
+        mot = mot.strip(",.;")
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", mot):
+            return mot
+        nom = sans_accents(mot)
+        if nom in COULEURS_NOMS:
+            return COULEURS_NOMS[nom]
+    return defaut
+
+
+def police_texte(taille):
+    for chemin in POLICES_TEXTE:
+        try:
+            return ImageFont.truetype(chemin, taille)
+        except Exception:
+            pass
+    try:
+        return ImageFont.load_default(size=taille)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def sur_rgb(img, action):
+    """Applique une retouche de couleur sans briser la transparence."""
+    if img.mode == "RGBA":
+        alpha = img.getchannel("A")
+        resultat = action(img.convert("RGB")).convert("RGB")
+        resultat.putalpha(alpha)
+        return resultat
+    return action(img.convert("RGB")).convert("RGB")
+
+
+def borne(valeur, mini, maxi):
+    return max(mini, min(maxi, valeur))
+
+
+# Les noms d'opérations qu'on connaît : ça sert à lire « noir et blanc » comme « noir_et_blanc ».
+NOMS_STUDIO = frozenset((
+    "luminosite", "lumiere", "contraste", "saturation", "couleurs", "nettete", "noir_et_blanc",
+    "noiretblanc", "gris", "sepia", "inverser", "flou", "rotation", "miroir", "miroir_vertical",
+    "recadrer", "carre", "taille", "texte", "bordure", "vignette", "chaud", "froid",
+    "pixeliser", "posteriser"))
+
+
+def nom_studio(ligne):
+    """Sort le nom de l'opération pis ses arguments.
+
+    Les instructions demandent « noir_et_blanc », mais une IA écrit souvent « noir et blanc ».
+    On essaie donc les trois premiers mots, pis les deux, avant de garder juste le premier.
+    """
+    for k in (3, 2, 1):
+        m = re.match(r"\s*" + r"\s+".join([r"([^\s\"«“]+)"] * k), ligne)
+        if m is None:
+            continue
+        nom = "_".join(sans_accents(x) for x in m.groups()).replace("-", "_").rstrip(":").lower()
+        if nom in NOMS_STUDIO or k == 1:
+            return nom, ligne[m.end():].strip()
+    return "", ""
+
+
+def appliquer_studio(image, operations):
+    """Fait les modifications demandées par l'IA. Retourne (nouvelle image, liste de ce qui a été fait)."""
+    img, fait = image.copy(), []
+    for ligne in operations:
+        ligne = ligne.strip().strip("-•* ")
+        nom, reste = nom_studio(ligne)
+        if not nom:
+            continue
+        nombres = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", reste.replace(",", "."))]
+        mots = reste.split()
+
+        def n(i, defaut):
+            return nombres[i] if len(nombres) > i else defaut
+
+        def facteur(defaut):
+            """« 1.3 » c'est un facteur. « +30 » ou « 40 % », c'est un pourcentage en plus ou en moins."""
+            if not nombres:
+                return defaut
+            if re.search(r"[+-]\s*\d|\d\s*%", reste):
+                return 1 + nombres[0] / 100
+            return nombres[0]
+
+        try:
+            w, h = img.size
+            if nom in ("luminosite", "lumiere"):
+                x = borne(facteur(1.2), 0.1, 3)
+                img = sur_rgb(img, lambda r: ImageEnhance.Brightness(r).enhance(x))
+                fait.append(f"luminosité ×{x:g}")
+            elif nom == "contraste":
+                x = borne(facteur(1.2), 0.1, 3)
+                img = sur_rgb(img, lambda r: ImageEnhance.Contrast(r).enhance(x))
+                fait.append(f"contraste ×{x:g}")
+            elif nom in ("saturation", "couleurs"):
+                x = borne(facteur(1.3), 0, 3)
+                img = sur_rgb(img, lambda r: ImageEnhance.Color(r).enhance(x))
+                fait.append(f"saturation ×{x:g}")
+            elif nom == "nettete":
+                x = borne(facteur(1.5), 0, 4)
+                img = sur_rgb(img, lambda r: ImageEnhance.Sharpness(r).enhance(x))
+                fait.append(f"netteté ×{x:g}")
+            elif nom in ("noir_et_blanc", "noiretblanc", "gris"):
+                img = sur_rgb(img, ImageOps.grayscale)
+                fait.append("noir et blanc")
+            elif nom == "sepia":
+                img = sur_rgb(img, lambda r: ImageOps.colorize(ImageOps.grayscale(r), "#2e1f0f", "#f5e6c8"))
+                fait.append("sépia")
+            elif nom == "inverser":
+                img = sur_rgb(img, ImageOps.invert)
+                fait.append("couleurs inversées")
+            elif nom == "flou":
+                x = borne(n(0, 3), 0.5, 40)
+                img = img.filter(ImageFilter.GaussianBlur(x))
+                fait.append(f"flou {x:g} px")
+            elif nom == "rotation":
+                angle = n(0, 90)
+                if angle % 90 == 0:
+                    tours = int(angle // 90) % 4
+                    if tours:
+                        img = img.transpose([None, Image.Transpose.ROTATE_90, Image.Transpose.ROTATE_180,
+                                             Image.Transpose.ROTATE_270][tours])
+                else:
+                    fond = (0, 0, 0, 0) if img.mode == "RGBA" else (255, 255, 255)
+                    img = img.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC, fillcolor=fond)
+                fait.append(f"rotation {angle:g}°")
+            elif nom == "miroir":
+                img = ImageOps.mirror(img)
+                fait.append("miroir")
+            elif nom == "miroir_vertical":
+                img = ImageOps.flip(img)
+                fait.append("miroir vertical")
+            elif nom == "recadrer":
+                g, hh, d, b = (borne(n(i, 0), 0, 45) for i in range(4))
+                img = img.crop((round(w * g / 100), round(h * hh / 100),
+                                round(w * (1 - d / 100)), round(h * (1 - b / 100))))
+                fait.append("recadrée")
+            elif nom == "carre":
+                cote = min(w, h)
+                img = img.crop(((w - cote) // 2, (h - cote) // 2, (w + cote) // 2, (h + cote) // 2))
+                fait.append("carré")
+            elif nom == "taille":
+                largeur = int(borne(n(0, w), 16, 4000))
+                img = img.resize((largeur, max(1, round(h * largeur / w))), Image.Resampling.LANCZOS)
+                fait.append(f"largeur {largeur} px")
+            elif nom == "texte":
+                trouve = re.search(r"[\"«“](.+?)[\"»”]", reste)
+                texte = trouve.group(1).strip() if trouve else reste
+                apres = reste[trouve.end():].split() if trouve else []
+                position = next((sans_accents(x) for x in apres if sans_accents(x) in
+                                 ("haut", "bas", "centre", "milieu")), "bas")
+                couleur = couleur_dans(apres, "#ffffff")
+                img = ecrire_sur_image(img, texte, position, couleur)
+                fait.append(f"texte « {texte} »")
+            elif nom == "bordure":
+                epaisseur = int(borne(n(0, 20), 1, 200))
+                couleur = couleur_dans(mots, "#ffffff")
+                remplissage = couleur if img.mode != "RGBA" else couleur + "ff"
+                img = ImageOps.expand(img, border=epaisseur, fill=remplissage)
+                fait.append(f"bordure {epaisseur} px")
+            elif nom == "vignette":
+                force = borne(n(0, 0.5), 0, 1)
+                masque = Image.radial_gradient("L").resize(img.size)
+                masque = masque.point(lambda v: int(min(255, v * force * 1.3)))
+                img = sur_rgb(img, lambda r: Image.composite(Image.new("RGB", r.size, "black"), r, masque))
+                fait.append("vignette")
+            elif nom in ("chaud", "froid"):
+                chaud = nom == "chaud"
+
+                def filtre(r):
+                    rouge, vert, bleu = r.split()
+                    rouge = rouge.point(lambda v: min(255, int(v * (1.08 if chaud else 0.92) + (8 if chaud else 0))))
+                    bleu = bleu.point(lambda v: min(255, int(v * (0.9 if chaud else 1.1) + (0 if chaud else 8))))
+                    return Image.merge("RGB", (rouge, vert, bleu))
+
+                img = sur_rgb(img, filtre)
+                fait.append("filtre chaud" if chaud else "filtre froid")
+            elif nom == "pixeliser":
+                taille = int(borne(n(0, 10), 2, 100))
+                petit = img.resize((max(1, w // taille), max(1, h // taille)), Image.Resampling.BILINEAR)
+                img = petit.resize((w, h), Image.Resampling.NEAREST)
+                fait.append("pixelisée")
+            elif nom == "posteriser":
+                bits = int(borne(n(0, 3), 1, 8))
+                img = sur_rgb(img, lambda r: ImageOps.posterize(r, bits))
+                fait.append("postérisée")
+        except Exception:
+            continue   # une opération qui marche pas n'empêche pas les autres
+    return img, fait
+
+
+def ecrire_sur_image(img, texte, position, couleur):
+    img = img.copy()
+    dessin = ImageDraw.Draw(img)
+    taille = max(14, img.width // 12)
+    for _ in range(6):   # rapetisse le texte s'il dépasse
+        police = police_texte(taille)
+        contour = max(1, taille // 14)
+        boite = dessin.textbbox((0, 0), texte, font=police, stroke_width=contour)
+        largeur, hauteur = boite[2] - boite[0], boite[3] - boite[1]
+        if largeur <= img.width * 0.92:
+            break
+        taille = int(taille * img.width * 0.9 / largeur)
+    x = (img.width - largeur) / 2 - boite[0]
+    y = {"haut": img.height * 0.05, "bas": img.height * 0.95 - hauteur}.get(
+        position, (img.height - hauteur) / 2) - boite[1]
+    r, g, b = (int(couleur[i:i + 2], 16) for i in (1, 3, 5))
+    bordure = "#000000" if (r * 299 + g * 587 + b * 114) / 1000 > 140 else "#ffffff"
+    dessin.text((x, y), texte, font=police, fill=couleur, stroke_width=contour, stroke_fill=bordure)
+    return img
+
+
+class StudioImage(tk.Frame):
+    """Le Studio : l'image partagée, avec les modifications demandées. Avant/Après d'un clic."""
+    HAUTEUR_IMAGE = 420
+
+    def __init__(self, parent, app, avant, apres, resume, largeur, anime=True, hauteur_image=None,
+                 suivre=None):
+        super().__init__(parent, bg=GRIS_BOITE, highlightthickness=2, highlightbackground=ORANGE)
+        self.app, self.avant, self.apres = app, avant, apres
+        self.montre_apres = apres is not None
+        haut = tk.Frame(self, bg=GRIS_BOITE)
+        haut.pack(fill="x", padx=12, pady=(10, 4))
+        tk.Label(haut, text="Studio", bg=GRIS_BOITE, fg=NOIR, font=(FAMILLE, 14, "bold")).pack(side="left")
+        details = " · ".join(resume) if resume else ("Ton image" if apres is None else "")
+        tk.Label(haut, text=details, bg=GRIS_BOITE, fg="#2e2e2e", font=(FAMILLE, 10), anchor="w",
+                 justify="left", wraplength=largeur - 140).pack(side="left", padx=(12, 0), fill="x")
+        cote = (largeur - 28, hauteur_image or self.HAUTEUR_IMAGE)
+        self.img_avant = vignette_tk(avant, *cote)
+        self.img_apres = vignette_tk(apres, *cote) if apres is not None else None
+        self.affichage = tk.Label(self, bg=GRIS_BOITE, image=self.img_apres or self.img_avant)
+        self.affichage.pack(padx=12, pady=6)
+        boutons = tk.Frame(self, bg=GRIS_BOITE)
+        boutons.pack(fill="x", padx=12, pady=(4, 12))
+        if apres is not None:
+            self.bouton_bascule = bouton_orange(boutons, "Voir l'avant", self.basculer, taille=9)
+            self.bouton_bascule.pack(side="left")
+            self.etiquette = tk.Label(boutons, text="Après", bg=GRIS_BOITE, fg=NOIR, font=(FAMILLE, 10, "bold"))
+            self.etiquette.pack(side="left", padx=10)
+        bouton_orange(boutons, "Mettre dans le Codex", self.vers_codex, taille=9).pack(side="right")
+        bouton_orange(boutons, "Enregistrer", self.enregistrer, taille=9).pack(side="right", padx=(0, 8))
+        if anime:   # le Studio s'ouvre en glissant vers le bas
+            self.update_idletasks()
+            hauteur = self.winfo_reqheight()
+            self.pack_propagate(False)
+            self.config(width=largeur, height=1)
+
+            def grandir(v):
+                self.config(height=max(1, int(v)))
+                if suivre:
+                    suivre()   # la conversation défile pour suivre le Studio qui s'ouvre
+
+            app.animer(f"studio{id(self)}", 1, hauteur, grandir, etapes=20, douce=True)
+
+    def image_montree(self):
+        return self.apres if (self.montre_apres and self.apres is not None) else self.avant
+
+    def basculer(self):
+        self.montre_apres = not self.montre_apres
+        self.affichage.config(image=self.img_apres if self.montre_apres else self.img_avant)
+        self.bouton_bascule.config(text="Voir l'avant" if self.montre_apres else "Voir l'après")
+        self.etiquette.config(text="Après" if self.montre_apres else "Avant")
+
+    def enregistrer(self):
+        chemin = filedialog.asksaveasfilename(
+            title="Enregistrer l'image", defaultextension=".png", initialfile="studio.png",
+            filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg *.jpeg"), ("WebP", "*.webp")])
+        if chemin:
+            Path(chemin).write_bytes(octets_pour(chemin, self.image_montree()))
+
+    def vers_codex(self):
+        self.app.mettre_image_dans_codex(self.image_montree())
 
 
 # ---------- Moteur de schéma ----------
@@ -1635,6 +2085,8 @@ class LogoAgent:
 
 # ---------- Un fichier ouvert dans l'éditeur du Codex ----------
 class Onglet:
+    est_image = False
+
     def __init__(self, codex, chemin, contenu, sha=None):
         self.codex = codex
         self.chemin = chemin
@@ -1774,6 +2226,45 @@ class Onglet:
             if suivant == i:
                 break
             i = suivant
+
+
+# ---------- Une image ouverte dans le Codex (pour la voir, pis l'envoyer dans le projet) ----------
+class OngletImage:
+    """Pareil qu'un onglet de code, mais ça montre l'image au lieu du texte."""
+    est_image = True
+
+    def __init__(self, codex, chemin, octets, sha=None):
+        self.codex, self.chemin, self.octets, self.sha = codex, chemin, octets, sha
+        self.modifie = False
+        self.cadre = tk.Frame(codex.zone_editeur, bg=CODE_FOND)
+        self.cadre.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.texte = tk.Label(self.cadre, bg=CODE_FOND)   # « texte » : pour que le reste marche pareil
+        self.texte.pack(expand=True)
+        try:
+            self.image = ouvrir_image(octets)
+            info = f"{self.image.width} × {self.image.height} px · {taille_lisible(len(octets))}"
+        except Exception:
+            self.image, info = None, "Image impossible à afficher"
+        tk.Label(self.cadre, text=f"{chemin}   ({info})", bg=CODE_FOND, fg="#9a9a9a",
+                 font=(FAMILLE, 10)).pack(side="bottom", pady=8)
+        self.cadre.bind("<Configure>", lambda e: self.planifier())
+        self.image_tk = None
+
+    def contenu(self):
+        return None      # une image, ça n'a pas de texte
+
+    def planifier(self):
+        if self.image is None:
+            return
+        largeur = max(self.cadre.winfo_width() - 40, 100)
+        hauteur = max(self.cadre.winfo_height() - 70, 100)
+        self.image_tk = vignette_tk(self.image, largeur, hauteur)
+        self.texte.config(image=self.image_tk)
+
+    def set_modifie(self, valeur):
+        if valeur != self.modifie:
+            self.modifie = valeur
+            self.codex.dessiner_onglets()
 
 
 # ---------- Voir ce qui a changé dans un fichier ----------
@@ -1929,6 +2420,7 @@ class CodexVue(tk.Frame):
         self.messages = []           # conversation avec l'assistant Codex
         self.occupe = False
         self.nb_liens = 0
+        self.pieces = []             # images jointes à la prochaine demande
 
         self.construire_barre()
         self.etat_label = tk.Label(self, text="", anchor="w", bg=GRIS_MENU, fg=NOIR,
@@ -1994,6 +2486,9 @@ class CodexVue(tk.Frame):
         options = tk.Frame(centre, bg=GRIS_FOND)
         options.pack(fill="x", pady=(8, 0))
         self.app.creer_bouton_moteur(options).pack(side="left")
+        self.app.bouton_image(options, self.joindre_images).pack(side="left", padx=(8, 0))
+        self.cadre_pieces = tk.Frame(options, bg=GRIS_FOND)
+        self.cadre_pieces.pack(side="left")
         self.saisie.bind("<Return>", self.envoyer)
         self.saisie.bind("<Shift-Return>", lambda e: (self.saisie.insert("insert", "\n"), "break")[1])
 
@@ -2009,6 +2504,7 @@ class CodexVue(tk.Frame):
         tk.Label(haut, text="Éditeur", bg=GRIS_FOND, fg=NOIR,
                  font=(FAMILLE, 11, "bold")).pack(side="left")
         bouton_orange(haut, "+ Fichier", self.nouveau_fichier, taille=9).pack(side="right", padx=12, pady=8)
+        bouton_orange(haut, "+ Image", self.image_vers_projet, taille=9).pack(side="right", pady=8)
         self.barre_onglets = tk.Frame(e, bg=GRIS_FOND, height=38)
         self.barre_onglets.pack(fill="x")
         self.barre_onglets.pack_propagate(False)
@@ -2195,6 +2691,14 @@ class CodexVue(tk.Frame):
             return
         self.etat(f"Ouverture de {chemin}…")
         depot, token, sha = self.depot, self.token, info["sha"]
+        if Path(chemin).suffix.lower() in EXT_IMAGES and Image is not None:
+            def image_recue(octets, err):
+                if err:
+                    self.etat(erreur_github(err))
+                elif depot == self.depot:
+                    self.ajouter_image_octets(chemin, octets, sha=sha, modifie=False)
+            self.app.en_arriere_plan(lambda: lire_blob_octets(depot, sha, token), image_recue)
+            return
         self.app.en_arriere_plan(lambda: lire_blob(depot, sha, token),
                                  lambda texte, err: self.fichier_recu(depot, chemin, sha, texte, err))
 
@@ -2289,18 +2793,22 @@ class CodexVue(tk.Frame):
                 chemin = filedialog.asksaveasfilename(title="Enregistrer sur l'ordi",
                                                       initialfile=Path(o.chemin).name, parent=self)
                 if chemin:
-                    Path(chemin).write_text(o.contenu(), encoding="utf-8")
+                    if o.est_image:
+                        Path(chemin).write_bytes(o.octets)
+                    else:
+                        Path(chemin).write_text(o.contenu(), encoding="utf-8")
                     o.set_modifie(False)
             return
-        envois = [(o, o.chemin, o.contenu(), o.sha) for o in onglets]
+        envois = [(o, o.chemin, o.octets if o.est_image else o.contenu(), o.sha) for o in onglets]
         depot, branche, token = self.depot, self.branche, self.token
         self.etat(f"Envoi sur GitHub de {len(envois)} fichier(s)…")
 
         def travail():
             resultats = []
             for o, chemin, contenu, sha in envois:
+                octets = contenu if isinstance(contenu, bytes) else contenu.encode("utf-8")
                 corps = {"message": f"Codex : {'mise à jour' if sha else 'création'} de {chemin}",
-                         "content": base64.b64encode(contenu.encode("utf-8")).decode("ascii"),
+                         "content": base64.b64encode(octets).decode("ascii"),
                          "branch": branche}
                 if sha:
                     corps["sha"] = sha
@@ -2324,11 +2832,14 @@ class CodexVue(tk.Frame):
                 erreur = erreur or f"{chemin} : {erreur_github(e)}"
                 continue
             reussis.append(Path(chemin).name)
+            image = isinstance(contenu, bytes)
             if depot == self.depot:
-                self.arbre[chemin] = {"sha": sha, "taille": len(contenu.encode("utf-8"))}
-                self.cache[chemin] = contenu
+                self.arbre[chemin] = {"sha": sha,
+                                      "taille": len(contenu if image else contenu.encode("utf-8"))}
+                if not image:
+                    self.cache[chemin] = contenu
             o.sha = sha
-            if o.contenu() == contenu:   # pas retouché pendant l'envoi
+            if image or o.contenu() == contenu:   # pas retouché pendant l'envoi
                 o.set_modifie(False)
         message = f"Enregistré sur GitHub : {', '.join(reussis)}." if reussis else ""
         self.etat((message + "  " + erreur) if erreur else message)
@@ -2410,7 +2921,11 @@ class CodexVue(tk.Frame):
         budget = CONTEXTE_CLAUDE if type_moteur == "claude" else CONTEXTE_OLLAMA
         # Une photo de ce qu'on a déjà (le fil à part touche pas à l'interface)
         ordre = ([self.actif] if self.actif else []) + [o for o in self.onglets if o is not self.actif]
-        onglets = [(o.chemin, o.contenu()) for o in ordre]
+        onglets = [(o.chemin, o.contenu()) for o in ordre if not o.est_image]
+        pieces, self.pieces = self.pieces, []
+        self.app.dessiner_pieces(self.cadre_pieces, self.pieces, self.retirer_piece)
+        if pieces:   # l'IA sait quel numéro va avec quelle image
+            self.app.montrer_vignettes(self.chat, pieces, 90)
         depot, branche, token = self.depot, self.branche, self.token
         arbre, cache = dict(self.arbre), dict(self.cache)
         self.points = ajouter_ligne_attente(self.chat, f"Codex ({nom_court(moteur)}) regarde ton projet",
@@ -2426,13 +2941,22 @@ class CodexVue(tk.Frame):
         def progres(message):
             self.app.depuis_fil(lambda: self.maj_attente(message))
 
+        voit = type_moteur == "claude" or modele_voit_images(modele)
+        images = [image_pour_ia(p["image"]) for p in pieces] if voit else []
+        demande = question
+        if pieces:
+            demande += "\n(Images jointes : " + ", ".join(
+                f"{i} = {p['nom']}" for i, p in enumerate(pieces, 1)) + ")"
+            if not voit:
+                demande += ("\n(Tu peux pas les voir, ce modèle-là, mais tu peux quand même les "
+                            "mettre dans le projet avec [IMAGE n chemin].)")
         self.app.en_arriere_plan(
-            lambda: agent_codex(question, historique, onglets, cache, arbre, depot, branche,
-                                token, budget, ia, progres),
-            lambda r, err: self.reponse(r, err, type_moteur, modele, depot))
+            lambda: agent_codex(demande, historique, onglets, cache, arbre, depot, branche,
+                                token, budget, ia, progres, images),
+            lambda r, err: self.reponse(r, err, type_moteur, modele, depot, pieces))
         return "break"
 
-    def reponse(self, resultat, err, type_moteur, modele, depot):
+    def reponse(self, resultat, err, type_moteur, modele, depot, pieces=()):
         enlever_ligne_attente(self.chat, "attente_codex", getattr(self, "points", None))
         self.points = None
         if err:
@@ -2447,6 +2971,14 @@ class CodexVue(tk.Frame):
                                        "j'ai rien touché. Renvoie ta demande.", lambda: True, self.fin_reponse)
             return
         self.cache.update(resultat["lus"])
+        images_ajoutees = []
+        for numero, chemin in re.findall(r"\[IMAGE\s+(\d+)\s*[:\-]?\s*([^\]\n]+)\]",
+                                         resultat["texte"] or "", re.I):
+            numero, chemin = int(numero), chemin.strip().strip("`\"' ").lstrip("/")
+            if 1 <= numero <= len(pieces) and chemin:
+                piece = pieces[numero - 1]
+                self.ajouter_image(chemin, piece["image"], piece.get("original"))
+                images_ajoutees.append((chemin, piece))
         explication, fichiers = extraire_fichiers(resultat["texte"] or "")
         ecrits = []   # (chemin, avant, apres, nouveau fichier?)
         for chemin, contenu in fichiers:
@@ -2457,12 +2989,13 @@ class CodexVue(tk.Frame):
             onglet = self.trouver_onglet(propre)
             avant = onglet.contenu() if onglet else self.cache.get(propre, "")
             ecrits.append((self.appliquer_fichier(chemin, contenu), avant, contenu, nouveau))
-        resume = explication or ("C'est fait, regarde les fichiers." if ecrits else
+        resume = explication or ("C'est fait, regarde les fichiers." if ecrits or images_ajoutees else
                                  "Pas de réponse cette fois-ci. Reformule ta demande.")
-        note = f"\n(Fichiers écrits : {', '.join(c for c, _, _, _ in ecrits)})" if ecrits else ""
+        tous = [c for c, _, _, _ in ecrits] + [c for c, _ in images_ajoutees]
+        note = f"\n(Fichiers écrits : {', '.join(tous)})" if tous else ""
         self.messages.append({"role": "assistant", "content": resume + note})
         self.app.ecrire(self.chat, resume, lambda: True,
-                        lambda: self.fin_reponse(ecrits, resultat["vus"]))
+                        lambda: self.fin_reponse(ecrits, resultat["vus"], images_ajoutees))
 
     def appliquer_fichier(self, chemin, contenu):
         """Met le fichier écrit par l'IA dans un onglet (rien part sur GitHub avant « Enregistrer »)."""
@@ -2470,6 +3003,10 @@ class CodexVue(tk.Frame):
             chemin = chemin[2:]
         chemin = chemin.lstrip("/")
         o = self.trouver_onglet(chemin)
+        if o is not None and o.est_image:
+            self.onglets.remove(o)
+            o.cadre.destroy()
+            o = None
         if o:
             o.remplacer(contenu)
         else:
@@ -2478,27 +3015,88 @@ class CodexVue(tk.Frame):
         self.activer(o, montrer=False)
         return chemin
 
-    def fin_reponse(self, ecrits=(), vus=()):
+    # ----- Les images -----
+    def joindre_images(self):
+        """Le trombone : tu choisis des images à envoyer avec ta demande."""
+        self.pieces += self.app.choisir_images(self)
+        self.pieces = self.pieces[:4]
+        self.app.dessiner_pieces(self.cadre_pieces, self.pieces, self.retirer_piece)
+        self.saisie.focus_set()
+
+    def retirer_piece(self, i):
+        del self.pieces[i]
+        self.app.dessiner_pieces(self.cadre_pieces, self.pieces, self.retirer_piece)
+
+    def image_vers_projet(self):
+        """« + Image » : prend une image de ton ordi pour l'ajouter au projet."""
+        if Image is None:
+            messagebox.showinfo("Images", MESSAGE_PILLOW, parent=self)
+            return
+        fichier = filedialog.askopenfilename(title="Image à ajouter au projet", filetypes=TYPES_IMAGES,
+                                             parent=self)
+        if not fichier:
+            return
+        chemin = simpledialog.askstring("Image dans le projet", "Chemin de l'image dans le projet :",
+                                        initialvalue=f"images/{Path(fichier).name}", parent=self)
+        if chemin and chemin.strip():
+            self.ajouter_image(chemin.strip().lstrip("/"), ouvrir_image(fichier), fichier)
+
+    def ajouter_image(self, chemin, image, original=None, montrer=False):
+        """Prépare une image pour le projet (elle part sur GitHub avec « Enregistrer »)."""
+        if not Path(chemin).suffix:
+            chemin += ".png"
+        if original and Path(original).suffix.lower() == Path(chemin).suffix.lower():
+            octets = Path(original).read_bytes()   # même format : on garde le fichier tel quel
+        else:
+            octets = octets_pour(chemin, image)
+        self.ajouter_image_octets(chemin, octets, sha=self.arbre.get(chemin, {}).get("sha"),
+                                  montrer=montrer)
+
+    def ajouter_image_octets(self, chemin, octets, sha=None, modifie=True, montrer=True):
+        vieux = self.trouver_onglet(chemin)
+        if vieux is not None:
+            self.onglets.remove(vieux)
+            vieux.cadre.destroy()
+        onglet = OngletImage(self, chemin, octets, sha)
+        self.onglets.append(onglet)
+        onglet.set_modifie(modifie)
+        self.activer(onglet, montrer=montrer)
+        if modifie:
+            self.etat(f"Image prête : {chemin}. Clique « Enregistrer » pour l'envoyer sur GitHub.")
+
+    def fin_reponse(self, ecrits=(), vus=(), images_ajoutees=()):
         if vus:
             noms = ", ".join(Path(c).name for c in vus[:8]) + (f" (+{len(vus) - 8})" if len(vus) > 8 else "")
             self.chat.insert("end", f"Fichiers lus : {noms}\n", "sources")
-        chemins = [c for c, _, _, _ in ecrits]
+        chemins = [c for c, _, _, _ in ecrits] + [c for c, _ in images_ajoutees]
         # Si t'as coché « Pousser tout seul », ça part sur GitHub sans rien demander.
         if chemins and self.depot and self.auto_push.get():
             self.cartes(ecrits)
+            self.vignettes_ajoutees(images_ajoutees)
             self.chat.insert("end", "J'envoie ça sur GitHub…\n", "sources")
             self.chat.see("end")
             self.enregistrer([o for o in self.onglets if o.chemin in set(chemins)])
             self.occupe = False
             return
         self.cartes(ecrits)
-        if ecrits:
+        self.vignettes_ajoutees(images_ajoutees)
+        if ecrits or images_ajoutees:
             self.chat.insert("end", "Clique un fichier pour voir ce qui a changé. "
                              + ("Quand c'est correct, clique « Enregistrer ».\n" if self.depot else
                                 "Clique « Enregistrer » pour les sauvegarder sur ton ordi.\n"),
                              "sources")
         self.chat.see("end")
         self.occupe = False
+
+    def vignettes_ajoutees(self, images_ajoutees):
+        """Chaque image mise dans le projet s'affiche en petit, pis son nom s'ouvre d'un clic."""
+        for chemin, piece in images_ajoutees:
+            etiquette = f"image{self.nb_liens}"
+            self.nb_liens += 1
+            self.app.montrer_vignettes(self.chat, [piece], 70)
+            self.chat.insert("end", "Image ajoutée : ", "sources")
+            self.chat.insert("end", chemin + "\n", ("sources", "lien", etiquette))
+            self.chat.tag_bind(etiquette, "<Button-1>", lambda e, c=chemin: self.activer_chemin(c))
 
     def cartes(self, ecrits):
         """Ajoute une carte par fichier touché, fermée, dans la conversation."""
@@ -2533,6 +3131,10 @@ class AppEcriture(tk.Tk):
         self._anims = {}
         self.nb_liens = 0
         self.points_ia = None        # les 3 points animés pendant que l'IA réfléchit
+        self.pieces = []             # images jointes à la prochaine question
+        self.images_tk = []          # vignettes affichées (Tkinter les efface si on les garde pas)
+        self.image_courante = None   # la dernière image de la conversation (pour le Studio)
+        self.image_courante_chemin = None
         self.schemas = []
         self.question_en_cours = ""
         self.menu_ouvert = False
@@ -2583,6 +3185,9 @@ class AppEcriture(tk.Tk):
         self.options = tk.Frame(self.zone_saisie, bg=GRIS_FOND)
         self.options.pack(fill="x", pady=(8, 0))
         self.creer_bouton_moteur(self.options).pack(side="left")
+        self.bouton_image(self.options, self.joindre_images).pack(side="left", padx=(8, 0))
+        self.cadre_pieces = tk.Frame(self.options, bg=GRIS_FOND)
+        self.cadre_pieces.pack(side="left")
 
         # --- Menu de gauche + bouton ☰ (toujours par-dessus le reste) ---
         self.construire_menu_lateral()
@@ -3251,6 +3856,12 @@ class AppEcriture(tk.Tk):
         for m in self.messages:
             if m["role"] == "user":
                 self.document.insert("end", m["content"] + "\n", "question")
+                images = [c for c in m.get("images") or [] if Path(c).exists()]
+                if images and Image is not None:
+                    pieces = [{"image": ouvrir_image(c), "chemin": c} for c in images]
+                    self.montrer_vignettes(self.document, pieces, 130)
+                    self.image_courante = pieces[0]["image"]
+                    self.image_courante_chemin = pieces[0]["chemin"]
             else:
                 dernier = self.avatar()
                 debut = self.document.index("end-1c")
@@ -3260,6 +3871,8 @@ class AppEcriture(tk.Tk):
                                                [tuple(s) for s in m.get("sources") or []])
                 if m.get("meteo") is not None:
                     self.ajouter_meteo(m["meteo"])   # la météo d'astheure, en direct
+                if m.get("studio") and Image is not None:
+                    self.remontrer_studio(m["studio"])
         self.document.see("end")
         if self.logo and dernier:
             self.update_idletasks()
@@ -3278,13 +3891,21 @@ class AppEcriture(tk.Tk):
         if self.points_ia is not None:
             self.points_ia.destroy()
             self.points_ia = None
+        self.images_tk = []
+        self.image_courante = self.image_courante_chemin = None
         self.document.delete("1.0", "end")
         self.title("Écriture")
         if self.logo:
             self.logo.arreter_suivi()
 
     def historique_api(self):
-        return [{"role": m["role"], "content": m["content"]} for m in self.messages]
+        historique = []
+        for m in self.messages:
+            message = {"role": m["role"], "content": m["content"]}
+            if m.get("images"):
+                message["images_chemins"] = m["images"]
+            historique.append(message)
+        return historique
 
     # ---------- Codex ----------
     def ouvrir_codex(self):
@@ -3354,8 +3975,9 @@ class AppEcriture(tk.Tk):
         if self.en_animation or self.occupe:
             return "break"
         texte = self.saisie.get("1.0", "end-1c").strip()
-        if not texte:
+        if not texte and not self.pieces:
             return "break"
+        texte = texte or "Regarde mon image."
         moteur = self.moteurs.get(self.choix.get())
         if moteur is None:
             return "break"
@@ -3368,7 +3990,14 @@ class AppEcriture(tk.Tk):
 
         self.saisie.delete("1.0", "end")
         self.document.insert("end", texte + "\n", "question")
-        self.messages.append({"role": "user", "content": texte})
+        message = {"role": "user", "content": texte}
+        pieces, self.pieces = self.pieces, []
+        self.dessiner_pieces(self.cadre_pieces, self.pieces, self.retirer_piece)
+        if pieces:
+            self.montrer_vignettes(self.document, pieces, 130)
+            message["images"] = [p["chemin"] for p in pieces]
+            self.image_courante, self.image_courante_chemin = pieces[0]["image"], pieces[0]["chemin"]
+        self.messages.append(message)
         self.question_en_cours = texte
         self.montrer_attente(nom_court(moteur))
         self.occupe = True
@@ -3388,18 +4017,26 @@ class AppEcriture(tk.Tk):
         # Roule dans un fil à part pour que la fenêtre gèle pas pendant que l'IA réfléchit
         type_moteur, modele = moteur
         try:
+            avis = ""
+            if any(m.get("images_chemins") for m in historique):
+                voit = type_moteur == "claude" or modele_voit_images(modele)
+                if not voit and historique[-1].get("images_chemins"):
+                    avis = (f"{nom_court(moteur)} voit pas les images, mais peut quand même "
+                            "les modifier dans le Studio. Pour qu'il les voie : ollama pull gemma3, "
+                            "ou choisis Claude.")
+                historique = preparer_historique(historique, voit)
             if type_moteur == "claude":
                 texte, sources = appeler_claude(cle, historique, instructions_systeme(web=True),
                                                 modele=modele)
             else:
                 texte, sources = appeler_ollama(modele, historique, instructions_systeme(web=False))
-            self.resultats.put((generation, "ok", texte, sources))
+            self.resultats.put((generation, "ok", texte, sources, avis))
         except Exception as err:
-            self.resultats.put((generation, "erreur", message_erreur(err, type_moteur, modele), []))
+            self.resultats.put((generation, "erreur", message_erreur(err, type_moteur, modele), [], ""))
 
     def verifier_resultat(self):
         try:
-            generation, statut, texte, sources = self.resultats.get_nowait()
+            generation, statut, texte, sources, avis = self.resultats.get_nowait()
         except queue.Empty:
             if self.occupe:
                 self.after(100, self.verifier_resultat)
@@ -3418,18 +4055,26 @@ class AppEcriture(tk.Tk):
         if statut == "ok":
             texte, etapes = extraire_plan(texte, self.question_en_cours)
             texte, lieu_meteo = extraire_meteo(texte, self.question_en_cours)
+            texte, operations = extraire_studio(texte)
             texte = liens_markdown_en_texte(texte) or (
                 "Voici la météo :" if lieu_meteo is not None else "Voici le plan :" if etapes else
+                "Voilà ton image :" if operations else
                 "Pas de réponse cette fois-ci. Reformule ta question.")
-            self.messages.append({"role": "assistant", "content": texte, "etapes": etapes,
-                                  "sources": [list(s) for s in sources], "meteo": lieu_meteo})
+            avait_image = bool(self.messages and self.messages[-1].get("images"))
+            reponse = {"role": "assistant", "content": texte, "etapes": etapes,
+                       "sources": [list(s) for s in sources], "meteo": lieu_meteo}
+            self.messages.append(reponse)
             self.sauver_session()
 
             def apres_ecriture():
-                # Le schéma, les sources pis la météo arrivent une fois le texte fini d'écrire
+                # Le schéma, les sources, la météo pis le Studio arrivent une fois le texte fini d'écrire
                 index = self.ajouter_schema_et_sources(etapes, sources)
                 if lieu_meteo is not None:
                     self.ajouter_meteo(lieu_meteo)
+                if avis:
+                    self.document.insert("end", avis + "\n", "sources")
+                if operations or avait_image:
+                    self.ajouter_studio(operations, reponse)
                 self.fin_reponse(index)
 
             self.ecrire(self.document, texte, continuer, apres_ecriture)
@@ -3470,6 +4115,141 @@ class AppEcriture(tk.Tk):
         self.document.image_create(index, image=self.logo.image(LOGO_AVATAR), padx=3, align="center")
         self.document.tag_add("avatar", index)
         return index
+
+    # ---------- Images ----------
+    def bouton_image(self, parent, commande):
+        return tk.Button(parent, text="+ Image", command=commande, bg=ORANGE, fg=NOIR,
+                         activebackground=ORANGE_FONCE, activeforeground=NOIR, font=(FAMILLE, 10, "bold"),
+                         relief="flat", bd=0, highlightthickness=0, padx=12, pady=5, cursor="hand2")
+
+    def choisir_images(self, parent):
+        if Image is None:
+            messagebox.showinfo("Images", MESSAGE_PILLOW, parent=parent)
+            return []
+        fichiers = filedialog.askopenfilenames(title="Choisis une ou des images", filetypes=TYPES_IMAGES,
+                                               parent=parent)
+        return self.charger_pieces(fichiers)
+
+    def charger_pieces(self, fichiers):
+        pieces = []
+        for fichier in list(fichiers)[:4]:
+            try:
+                image = ouvrir_image(fichier)
+            except Exception:
+                messagebox.showerror("Image", f"Impossible d'ouvrir {Path(fichier).name}.")
+                continue
+            pieces.append({"nom": Path(fichier).name, "image": image, "chemin": garder_image(image),
+                           "original": str(fichier)})
+        return pieces
+
+    def dessiner_pieces(self, cadre, pieces, retirer):
+        """Les petites images jointes, à côté du bouton « + Image » (× pour en enlever une)."""
+        for w in cadre.winfo_children():
+            w.destroy()
+        for i, piece in enumerate(pieces):
+            puce = tk.Frame(cadre, bg=GRIS_ZONE, highlightthickness=1, highlightbackground=GRIS_BORD)
+            puce.pack(side="left", padx=(8, 0))
+            puce.vignette = vignette_tk(piece["image"], 26, 26)
+            tk.Label(puce, image=puce.vignette, bg=GRIS_ZONE).pack(side="left", padx=(3, 3), pady=2)
+            nom = piece["nom"] if len(piece["nom"]) <= 16 else piece["nom"][:15] + "…"
+            tk.Label(puce, text=nom, bg=GRIS_ZONE, fg=NOIR, font=(FAMILLE, 9)).pack(side="left")
+            tk.Button(puce, text="×", command=lambda i=i: retirer(i), bg=GRIS_ZONE, fg=NOIR,
+                      activebackground=ORANGE, relief="flat", bd=0, highlightthickness=0,
+                      font=(FAMILLE, 10, "bold"), padx=5, cursor="hand2").pack(side="left")
+
+    def montrer_vignettes(self, widget, pieces, taille):
+        for piece in pieces:
+            vignette = vignette_tk(piece["image"], taille, taille)
+            self.images_tk.append(vignette)
+            widget.image_create("end-1c", image=vignette, padx=4, pady=4)
+        widget.insert("end", "\n")
+        widget.see("end")
+
+    def joindre_images(self):
+        self.pieces = (self.pieces + self.choisir_images(self))[:4]
+        self.dessiner_pieces(self.cadre_pieces, self.pieces, self.retirer_piece)
+        self.saisie.focus_set()
+
+    def retirer_piece(self, i):
+        del self.pieces[i]
+        self.dessiner_pieces(self.cadre_pieces, self.pieces, self.retirer_piece)
+
+    def mettre_image_dans_codex(self, image):
+        self.ouvrir_codex()
+        chemin = simpledialog.askstring(
+            "Mettre dans le Codex", "Chemin de l'image dans le projet :",
+            initialvalue=f"images/studio-{datetime.datetime.now():%Y%m%d-%H%M%S}.png", parent=self)
+        if chemin and chemin.strip():
+            self.codex.ajouter_image(chemin.strip().lstrip("/"), image, montrer=True)
+
+    # ---------- Le Studio ----------
+    def ajouter_studio(self, operations, reponse):
+        """Montre l'image dans le Studio, avec les modifications demandées (si y'en a)."""
+        if self.image_courante is None:
+            if operations:
+                self.document.insert("end", "Partage d'abord une image avec le bouton « + Image », "
+                                            "pis redemande-moi.\n", "reponse")
+            return
+        avant, avant_chemin = self.image_courante, self.image_courante_chemin
+        self.nb_meteo += 1
+        marque, etiquette = f"studio{self.nb_meteo}", f"attente_studio{self.nb_meteo}"
+        self.document.mark_set(marque, "end-1c")
+        self.document.mark_gravity(marque, "left")
+        points = ajouter_ligne_attente(self.document, "Le Studio travaille", TAILLE_AGENT,
+                                       ("attente", etiquette)) if operations else None
+        generation = self.generation
+
+        def travail():
+            if not operations:
+                return None, [], None
+            apres, resume = appliquer_studio(avant, operations)
+            return (apres, resume, garder_image(apres, "studio")) if resume else (None, [], None)
+
+        def fini(resultat, err):
+            if generation != self.generation:
+                if points is not None:
+                    points.destroy()
+                return   # on a changé de conversation entre-temps
+            if points is not None:
+                enlever_ligne_attente(self.document, etiquette, points)
+            if err:
+                self.document.insert(marque, f"Le Studio a pas réussi : {err}\n", "reponse")
+                return
+            apres, resume, chemin = resultat
+            self.placer_studio(marque, avant, apres, resume, anime=True)
+            if apres is not None:
+                self.image_courante, self.image_courante_chemin = apres, chemin
+            reponse["studio"] = {"avant": avant_chemin, "apres": chemin, "resume": resume}
+            self.sauver_session()
+
+        if operations:
+            self.en_arriere_plan(travail, fini)
+        else:
+            fini((None, [], None), None)
+
+    def placer_studio(self, index, avant, apres, resume, anime):
+        # L'image garde une taille qui rentre dans l'écran, pour voir le Studio au complet
+        hauteur_image = max(160, min(StudioImage.HAUTEUR_IMAGE, self.document.winfo_height() - 150))
+        a_la_fin = self.document.compare(index, ">=", "end-2c")
+        studio = StudioImage(self.document, self, avant, apres, resume,
+                             max(self.document.winfo_width() - 60, 440), anime=anime,
+                             hauteur_image=hauteur_image,
+                             suivre=(lambda: self.document.yview_moveto(1.0)) if a_la_fin else None)
+        self.schemas.append(studio)   # effacé avec la conversation
+        self.document.window_create(index, window=studio, pady=8)
+        self.document.insert(f"{index}+1c", "\n")
+        if a_la_fin:
+            self.document.yview_moveto(1.0)
+
+    def remontrer_studio(self, studio):
+        try:
+            avant = ouvrir_image(studio["avant"])
+            apres = ouvrir_image(studio["apres"]) if studio.get("apres") else None
+        except Exception:
+            return   # les images ont été effacées de l'ordi
+        self.placer_studio(self.document.index("end-1c"), avant, apres, studio.get("resume") or [], False)
+        self.image_courante = apres or avant
+        self.image_courante_chemin = studio.get("apres") or studio["avant"]
 
     def ajouter_meteo(self, lieu):
         """Pouvoir magique : va chercher la météo en direct pis l'affiche en carte animée."""
