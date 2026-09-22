@@ -98,6 +98,7 @@ navigateur.
 | Changer d'IA | le menu orange sous la boîte |
 | Repartir de zéro | bouton **Nouveau** |
 | Ouvrir le menu des conversations | bouton **☰** |
+| Brancher la clé API ou le token | bouton **Paramètres ⚙** |
 
 L'assistant garde le fil de la conversation, quel que soit le moteur — on peut
 commencer avec un modèle local et passer à Claude en cours de route.
@@ -131,6 +132,42 @@ Le bouton **☰** en haut à gauche ouvre un panneau qui garde toutes tes
 conversations. Elles sont enregistrées toutes seules dans
 `~/.local/share/ecriture/sessions`, une par fichier JSON, avec leurs schémas et
 leurs sources. Un clic rouvre une conversation, un clic droit la supprime.
+
+## Paramètres
+
+Le bouton **Paramètres ⚙**, en bas du menu de gauche (ou en haut de l'écran une
+fois la conversation commencée), regroupe les deux branchements :
+
+| | Pour quoi | Où la prendre |
+| --- | --- | --- |
+| Clé API Claude | l'IA payante avec recherche web | <https://console.anthropic.com> |
+| Token GitHub | le Codex | *Settings → Developer settings → Fine-grained tokens*, permission **Contents : Read and write** |
+
+La fenêtre dit pour chacune si elle est branchée et d'où elle vient (fichier sur
+l'ordi, ou variable d'environnement) — **sans jamais réafficher la valeur**. Un
+champ laissé vide n'est pas touché ; **Effacer** supprime ce qui est enregistré.
+
+Les deux sont écrites dans `~/.config/ecriture`, en mode `600` : lisibles
+uniquement par ton compte. Rien ne part ailleurs.
+
+## Les IA gratuites
+
+Si le menu sous la boîte d'écriture ne propose que Claude, c'est qu'Ollama ne
+tourne pas sur cette machine — le menu le dit maintenant en toutes lettres,
+au lieu de laisser Claude tout seul sans explication.
+
+**Ajouter des IA gratuites…**, au bas de ce menu (ou depuis Paramètres), ouvre
+une fenêtre qui :
+
+- dit si Ollama répond, et quels modèles sont déjà installés ;
+- s'il ne répond pas, donne la marche à suivre — un bouton vers
+  <https://ollama.com/download>, puis `ollama serve` à copier ;
+- liste cinq modèles à choisir, du plus léger au plus lourd, avec leur taille et
+  ce qu'ils valent. **Copier** met la commande `ollama pull …` dans le
+  presse-papier ; ceux déjà installés sont marqués.
+
+Une fois le téléchargement fini, le modèle apparaît tout seul dans le menu :
+la liste est relue à chaque ouverture.
 
 ## Le Codex
 

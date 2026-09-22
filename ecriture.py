@@ -108,6 +108,15 @@ CONTEXTE_CLAUDE = 150_000              # caractères de code max envoyés à Cla
 CONTEXTE_OLLAMA = 24_000               # … et aux modèles gratuits (leur mémoire est plus petite)
 CTX_OLLAMA_CODEX = 16384               # mémoire (tokens) demandée à Ollama pour le Codex
 
+# Les IA gratuites qu'on propose d'installer, de la plus légère à la plus lourde.
+MODELES_SUGGERES = (
+    ("llama3.2",    "2 Go",  "Léger et rapide. Le meilleur premier choix sur un ordi ordinaire."),
+    ("gemma3",      "3,3 Go", "Compact, répond vite, correct en français."),
+    ("mistral",     "4,1 Go", "Équilibré. Bon en français, bon partout."),
+    ("qwen3",       "5,2 Go", "Le plus fort pour le code et le raisonnement."),
+    ("deepseek-r1", "5,2 Go", "Réfléchit avant de répondre. Plus lent, plus posé."),
+)
+
 QUEBECOIS = (
     "Tu es un vrai Québécois. Tu parles pis tu écris en français québécois familier, "
     "comme quelqu'un d'ici qui jase avec un chum : tu tutoies, tu utilises les tournures "
@@ -173,6 +182,19 @@ def enregistrer_secret(fichier, valeur):
     os.chmod(fichier, 0o600)
 
 
+def effacer_secret(fichier):
+    fichier.unlink(missing_ok=True)
+
+
+def etat_secret(fichier, variable_env):
+    """Dit si c'est branché, et d'où ça vient — sans jamais montrer la valeur."""
+    if fichier.exists() and fichier.read_text(encoding="utf-8").strip():
+        return True, "branché ✓   (enregistré sur cet ordi)"
+    if os.environ.get(variable_env, "").strip():
+        return True, f"branché ✓   (par la variable {variable_env})"
+    return False, "pas encore branché"
+
+
 # ---------- Ollama (gratuit, local) ----------
 def modeles_ollama():
     """Liste les modèles installés dans Ollama (vide si Ollama roule pas)."""
@@ -183,6 +205,15 @@ def modeles_ollama():
         return sorted(n for n in noms if "embed" not in n)  # les modèles « embed » jasent pas
     except Exception:
         return []
+
+
+def ollama_repond():
+    """True si le service Ollama répond sur la machine."""
+    try:
+        with urllib.request.urlopen(URL_OLLAMA + "/api/tags", timeout=2):
+            return True
+    except Exception:
+        return False
 
 
 def trouver_moteurs():
@@ -265,7 +296,8 @@ def message_erreur(err, type_moteur, modele):
                 return f"Le modèle « {modele} » n'est pas installé. Dans un terminal : ollama pull {modele}"
             return f"Ollama a renvoyé l'erreur {err.code} : {detail or err.reason}"
         if err.code == 401:
-            return "Clé API invalide. Clique sur « Clé API » en haut pour la changer."
+            return ("Clé API invalide. Ouvre « Paramètres » dans le menu de gauche "
+                    "pour la changer.")
         if err.code == 429:
             return "Trop de questions d'un coup. Attends quelques secondes et réessaie."
         if err.code in (500, 529):
@@ -700,6 +732,252 @@ def barre_defilement(parent, orientation, fond=GRIS_MENU, command=None):
     return tk.Scrollbar(parent, orient=orientation, command=command, bg="#5f5f5f",
                         troughcolor=fond, activebackground=ORANGE, relief="flat", bd=0,
                         width=12, elementborderwidth=0, highlightthickness=0)
+
+
+class IAGratuites(tk.Toplevel):
+    """Explique comment avoir des IA gratuites, pis laisse choisir laquelle installer."""
+
+    def __init__(self, app):
+        super().__init__(app, bg=GRIS_FOND, padx=24, pady=16)
+        self.app = app
+        self.title("IA gratuites")
+        self.resizable(False, False)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.fermer)
+        self.bind("<Escape>", lambda e: self.fermer())
+
+        tk.Label(self, text="IA gratuites", bg=GRIS_FOND, fg=NOIR,
+                 font=(FAMILLE, 16, "bold")).pack(anchor="w")
+        tk.Label(self, bg=GRIS_FOND, fg=NOIR, justify="left", font=(FAMILLE, 10),
+                 wraplength=520,
+                 text="Elles tournent sur ton ordi, sans compte ni carte de crédit, et sans "
+                      "Internet. Il faut Ollama, pis au moins un modèle téléchargé.").pack(
+            anchor="w", pady=(2, 10))
+
+        self.etat = tk.Label(self, bg=GRIS_ZONE, fg=NOIR, font=(FAMILLE, 11), anchor="w",
+                             padx=14, pady=8, justify="left")
+        self.etat.pack(fill="x", pady=(0, 10))
+
+        self.marche_a_suivre = tk.Frame(self, bg=GRIS_FOND)
+        self.marche_a_suivre.pack(fill="x")
+
+        tk.Label(self, text="Choisis un modèle à installer", bg=GRIS_FOND, fg=NOIR,
+                 font=(FAMILLE, 12, "bold")).pack(anchor="w", pady=(2, 1))
+        tk.Label(self, bg=GRIS_FOND, fg=NOIR, font=(FAMILLE, 10), justify="left",
+                 wraplength=520,
+                 text="« Copier » met la commande dans le presse-papier : colle-la dans un "
+                      "terminal. Le modèle apparaît ensuite tout seul dans le menu.").pack(
+            anchor="w", pady=(0, 6))
+
+        self.rangs = {}
+        for nom, taille, description in MODELES_SUGGERES:
+            self.construire_rang(nom, taille, description)
+
+        self.mot = tk.Label(self, text="", bg=GRIS_FOND, fg=NOIR, font=(FAMILLE, 10), anchor="w")
+        self.mot.pack(fill="x", pady=(8, 6))
+        rang = tk.Frame(self, bg=GRIS_FOND)
+        rang.pack(fill="x")
+        bouton_orange(rang, "Fermer", self.fermer).pack(side="right")
+        bouton_orange(rang, "Rafraîchir", self.rafraichir).pack(side="right", padx=(0, 10))
+
+        self.rafraichir()
+        self.update_idletasks()
+        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2
+        y = max(app.winfo_rooty() + 30, 0)
+        self.geometry(f"+{max(x, 0)}+{y}")
+
+    def construire_rang(self, nom, taille, description):
+        cadre = tk.Frame(self, bg=GRIS_ZONE, padx=14, pady=6)
+        cadre.pack(fill="x", pady=(0, 5))
+        haut = tk.Frame(cadre, bg=GRIS_ZONE)
+        haut.pack(fill="x")
+        tk.Label(haut, text=nom, bg=GRIS_ZONE, fg=NOIR,
+                 font=(FAMILLE, 12, "bold")).pack(side="left")
+        tk.Label(haut, text=f"   {taille}", bg=GRIS_ZONE, fg="#4a4a4a",
+                 font=(FAMILLE, 10)).pack(side="left")
+        marque = tk.Label(haut, text="", bg=GRIS_ZONE, font=(FAMILLE, 10, "bold"))
+        marque.pack(side="right", padx=(8, 0))
+        bouton = bouton_orange(haut, "Copier", lambda n=nom: self.copier(n), taille=9)
+        bouton.pack(side="right")
+        tk.Label(cadre, text=description, bg=GRIS_ZONE, fg=NOIR, font=(FAMILLE, 10),
+                 anchor="w", justify="left", wraplength=500).pack(fill="x", pady=(1, 0))
+        self.rangs[nom] = (marque, bouton)
+
+    def copier(self, nom):
+        commande = f"ollama pull {nom}"
+        self.clipboard_clear()
+        self.clipboard_append(commande)
+        self.mot.config(text=f"Copié : {commande}   — colle-le dans un terminal.")
+
+    def rafraichir(self):
+        installes = modeles_ollama()
+        courts = {n.removesuffix(":latest").split(":")[0] for n in installes}
+        if not ollama_repond():
+            self.etat.config(
+                text="Ollama ne répond pas sur cet ordi.\n"
+                     "Installe-le, puis démarre-le : c'est expliqué juste en dessous.")
+            self.montrer_marche_a_suivre(True)
+        elif installes:
+            self.etat.config(text=f"Ollama répond ✓   {len(installes)} modèle(s) installé(s) : "
+                                  + ", ".join(n.removesuffix(":latest") for n in installes[:6]))
+            self.montrer_marche_a_suivre(False)
+        else:
+            self.etat.config(text="Ollama répond ✓   mais aucun modèle n'est téléchargé.\n"
+                                  "Choisis-en un dans la liste, en bas.")
+            self.montrer_marche_a_suivre(False)
+        for nom, (marque, bouton) in self.rangs.items():
+            pose = nom in courts
+            marque.config(text="installé ✓" if pose else "", fg="#1d5e00")
+            bouton.config(text="Réinstaller" if pose else "Copier")
+        self.app.rafraichir_moteurs_partout()
+
+    def montrer_marche_a_suivre(self, visible):
+        for w in self.marche_a_suivre.winfo_children():
+            w.destroy()
+        if not visible:
+            return
+        tk.Label(self.marche_a_suivre, text="1.  Installe Ollama (gratuit, quelques clics)",
+                 bg=GRIS_FOND, fg=NOIR, font=(FAMILLE, 11), anchor="w").pack(fill="x")
+        bouton_orange(self.marche_a_suivre, "Ouvrir ollama.com",
+                      lambda: webbrowser.open("https://ollama.com/download"),
+                      taille=9).pack(anchor="w", pady=(3, 7))
+        tk.Label(self.marche_a_suivre, text="2.  Démarre-le dans un terminal :",
+                 bg=GRIS_FOND, fg=NOIR, font=(FAMILLE, 11), anchor="w").pack(fill="x")
+        rang = tk.Frame(self.marche_a_suivre, bg=GRIS_FOND)
+        rang.pack(fill="x", pady=(3, 9))
+        tk.Label(rang, text="  ollama serve  ", bg=GRIS_ZONE, fg=NOIR,
+                 font=(FAMILLE_CODE, 11)).pack(side="left", ipady=4)
+        bouton_orange(rang, "Copier", self.copier_serve, taille=9).pack(side="left", padx=(8, 0))
+
+    def copier_serve(self):
+        self.clipboard_clear()
+        self.clipboard_append("ollama serve")
+        self.mot.config(text="Copié : ollama serve   — colle-le dans un terminal.")
+
+    def fermer(self):
+        self.app.fenetre_ia = None
+        self.destroy()
+
+
+class Parametres(tk.Toplevel):
+    """Une seule place pour brancher la clé Claude pis le token GitHub."""
+
+    CHAMPS = (
+        ("Clé API Claude", FICHIER_CLE, "ANTHROPIC_API_KEY",
+         "Pour l'IA payante avec recherche web. Crée-la sur console.anthropic.com."),
+        ("Token GitHub", FICHIER_TOKEN, "GITHUB_TOKEN",
+         "Pour le Codex. Fine-grained token, permission « Contents : Read and write »."),
+    )
+
+    def __init__(self, app):
+        super().__init__(app, bg=GRIS_FOND, padx=24, pady=20)
+        self.app = app
+        self.title("Paramètres")
+        self.resizable(False, False)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.fermer)
+        self.bind("<Escape>", lambda e: self.fermer())
+        self.lignes = []
+
+        tk.Label(self, text="Paramètres", bg=GRIS_FOND, fg=NOIR,
+                 font=(FAMILLE, 16, "bold")).pack(anchor="w")
+        tk.Label(self, bg=GRIS_FOND, fg=NOIR, justify="left", font=(FAMILLE, 10),
+                 text=f"Les deux restent sur ton ordi, dans {DOSSIER_CONFIG},\n"
+                      "en lecture seule pour ton compte. Rien part ailleurs.").pack(
+            anchor="w", pady=(2, 16))
+
+        for titre, fichier, variable, aide in self.CHAMPS:
+            self.construire_champ(titre, fichier, variable, aide)
+
+        self.montrer = tk.BooleanVar(value=False)
+        tk.Checkbutton(self, text="Montrer ce que je tape", variable=self.montrer,
+                       command=self.basculer_masque, bg=GRIS_FOND, fg=NOIR,
+                       activebackground=GRIS_FOND, activeforeground=NOIR,
+                       selectcolor=GRIS_ZONE, font=(FAMILLE, 10), bd=0,
+                       highlightthickness=0, cursor="hand2").pack(anchor="w", pady=(4, 2))
+
+        self.mot = tk.Label(self, text="Laisse un champ vide pour ne pas y toucher.",
+                            bg=GRIS_FOND, fg=NOIR, font=(FAMILLE, 10), anchor="w")
+        self.mot.pack(fill="x", pady=(8, 10))
+
+        rang = tk.Frame(self, bg=GRIS_FOND)
+        rang.pack(fill="x")
+        bouton_orange(rang, "Enregistrer", self.enregistrer).pack(side="right")
+        bouton_orange(rang, "Fermer", self.fermer).pack(side="right", padx=(0, 10))
+        bouton_orange(rang, "IA gratuites…", self.app.ouvrir_ia_gratuites,
+                      taille=9).pack(side="left")
+
+        self.update_idletasks()
+        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2
+        y = app.winfo_rooty() + (app.winfo_height() - self.winfo_height()) // 3
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        self.lignes[0][1].focus_set()
+
+    def construire_champ(self, titre, fichier, variable, aide):
+        haut = tk.Frame(self, bg=GRIS_FOND)
+        haut.pack(fill="x")
+        tk.Label(haut, text=titre, bg=GRIS_FOND, fg=NOIR,
+                 font=(FAMILLE, 12, "bold")).pack(side="left")
+        etat = tk.Label(haut, bg=GRIS_FOND, font=(FAMILLE, 10))
+        etat.pack(side="right")
+        tk.Label(self, text=aide, bg=GRIS_FOND, fg=NOIR, font=(FAMILLE, 10),
+                 wraplength=430, justify="left").pack(anchor="w", pady=(1, 5))
+
+        rang = tk.Frame(self, bg=GRIS_FOND)
+        rang.pack(fill="x", pady=(0, 14))
+        champ = tk.Entry(rang, show="•", width=42, bg=GRIS_ZONE, fg=NOIR,
+                         insertbackground=NOIR, selectbackground=ORANGE,
+                         selectforeground=NOIR, font=(FAMILLE, 12), relief="flat", bd=0,
+                         highlightthickness=2, highlightbackground=GRIS_BORD,
+                         highlightcolor=ORANGE)
+        champ.pack(side="left", fill="x", expand=True, ipady=6, ipadx=8)
+        champ.bind("<Return>", lambda e: self.enregistrer())
+        bouton_orange(rang, "Effacer", lambda: self.effacer(fichier, variable),
+                      taille=9).pack(side="right", padx=(10, 0))
+        self.lignes.append((fichier, champ, etat, variable))
+        self.rafraichir_etat()
+
+    def rafraichir_etat(self):
+        for fichier, _, etiquette, variable in self.lignes:
+            branche, texte = etat_secret(fichier, variable)
+            etiquette.config(text=texte, fg="#1d5e00" if branche else "#6b2200")
+
+    def basculer_masque(self):
+        for _, champ, _, _ in self.lignes:
+            champ.config(show="" if self.montrer.get() else "•")
+
+    def effacer(self, fichier, variable):
+        if not fichier.exists():
+            if os.environ.get(variable, "").strip():
+                messagebox.showinfo(
+                    "Effacer", f"Rien à effacer ici : la valeur vient de la variable "
+                               f"{variable}, pas d'un fichier.", parent=self)
+            return
+        if messagebox.askyesno("Effacer", f"Effacer ce qui est enregistré dans\n{fichier} ?",
+                               parent=self):
+            effacer_secret(fichier)
+            self.rafraichir_etat()
+            self.app.secrets_changes()
+
+    def enregistrer(self):
+        changes = []
+        for fichier, champ, _, _ in self.lignes:
+            valeur = champ.get().strip()
+            if valeur:
+                enregistrer_secret(fichier, valeur)
+                champ.delete(0, "end")
+                changes.append(fichier)
+        self.rafraichir_etat()
+        if changes:
+            self.app.secrets_changes()
+            self.mot.config(text="C'est enregistré." if len(changes) == 1
+                            else "Les deux sont enregistrés.")
+        else:
+            self.mot.config(text="Rien à enregistrer : les deux champs sont vides.")
+
+    def fermer(self):
+        self.app.fenetre_parametres = None
+        self.destroy()
 
 
 # ---------- Le logo de l'agent ----------
@@ -1501,12 +1779,14 @@ class AppEcriture(tk.Tk):
         self.menu_ouvert = False
         self.menu_x = -LARGEUR_MENU
         self.codex = None
+        self.fenetre_parametres = None
+        self.fenetre_ia = None
         self.boutons_moteur = []
         self.ids_sessions = []
 
         # --- Boutons du haut (cachés au début) ---
         self.barre = tk.Frame(self, bg=GRIS_FOND)
-        bouton_orange(self.barre, "Clé API", self.changer_cle).pack(side="left", padx=(0, 10))
+        bouton_orange(self.barre, "Paramètres", self.ouvrir_parametres).pack(side="left", padx=(0, 10))
         bouton_orange(self.barre, "Sauvegarder", self.sauvegarder).pack(side="left", padx=(0, 10))
         bouton_orange(self.barre, "Nouveau", self.nouveau).pack(side="left")
 
@@ -1663,8 +1943,14 @@ class AppEcriture(tk.Tk):
         if relire:
             self.moteurs = trouver_moteurs()
         menu.delete(0, "end")
+        if not any(e != NOM_CLAUDE for e in self.moteurs):
+            # Rien de gratuit : on le dit, au lieu de laisser Claude tout seul sans explication
+            menu.add_command(label="Aucune IA gratuite trouvée sur cet ordi", state="disabled")
+            menu.add_separator()
         for etiquette in self.moteurs:
             menu.add_command(label=etiquette, command=lambda e=etiquette: self.choix.set(e))
+        menu.add_separator()
+        menu.add_command(label="Ajouter des IA gratuites…", command=self.ouvrir_ia_gratuites)
         if self.choix.get() not in self.moteurs:
             self.choix.set(next(iter(self.moteurs)))
 
@@ -1680,7 +1966,11 @@ class AppEcriture(tk.Tk):
         bouton_orange(m, "+ Nouvelle conversation", self.nouveau).pack(fill="x", padx=14, pady=(70, 12))
         tk.Label(m, text="Conversations", bg=GRIS_MENU, fg=NOIR, anchor="w",
                  font=(FAMILLE, 10, "bold")).pack(fill="x", padx=16)
-        bouton_orange(m, "Codex  </>", self.ouvrir_codex).pack(side="bottom", fill="x", padx=14, pady=14)
+        # packés « side=bottom » : le premier va tout en bas
+        bouton_orange(m, "Paramètres  ⚙", self.ouvrir_parametres).pack(
+            side="bottom", fill="x", padx=14, pady=(0, 14))
+        bouton_orange(m, "Codex  </>", self.ouvrir_codex).pack(
+            side="bottom", fill="x", padx=14, pady=(14, 8))
         self.liste_sessions = tk.Listbox(
             m, bg=GRIS_MENU, fg=NOIR, selectbackground=ORANGE, selectforeground=NOIR,
             font=(FAMILLE, 11), relief="flat", bd=0, highlightthickness=0, activestyle="none")
@@ -2017,6 +2307,36 @@ class AppEcriture(tk.Tk):
         self.saisie.insert("insert", "\n")
         return "break"
 
+    # ---------- Paramètres ----------
+    def ouvrir_parametres(self):
+        if self.fenetre_parametres is not None and self.fenetre_parametres.winfo_exists():
+            self.fenetre_parametres.lift()
+            self.fenetre_parametres.focus_set()
+        else:
+            self.fenetre_parametres = Parametres(self)
+        self.fermer_menu()
+
+    def ouvrir_ia_gratuites(self):
+        if self.fenetre_ia is not None and self.fenetre_ia.winfo_exists():
+            self.fenetre_ia.lift()
+            self.fenetre_ia.focus_set()
+        else:
+            self.fenetre_ia = IAGratuites(self)
+        self.fermer_menu()
+
+    def rafraichir_moteurs_partout(self):
+        """Relit Ollama et remet les noms à jour sur tous les boutons de choix."""
+        self.moteurs = trouver_moteurs()
+        if self.choix.get() not in self.moteurs:
+            self.choix.set(next(iter(self.moteurs)))
+        self.maj_boutons_moteur()
+
+    def secrets_changes(self):
+        """Une clé vient de changer : le Codex doit relire le token."""
+        if self.codex is not None:
+            self.codex.token = lire_secret(FICHIER_TOKEN, "GITHUB_TOKEN")
+            self.codex.depots = []
+
     # ---------- Clé API ----------
     def demander_cle(self):
         cle = simpledialog.askstring(
@@ -2025,10 +2345,6 @@ class AppEcriture(tk.Tk):
             enregistrer_secret(FICHIER_CLE, cle.strip())
             return cle.strip()
         return ""
-
-    def changer_cle(self):
-        if self.demander_cle():
-            messagebox.showinfo("Clé API", "Clé enregistrée.")
 
     # ---------- Sauvegarder / Nouveau ----------
     def sauvegarder(self):
