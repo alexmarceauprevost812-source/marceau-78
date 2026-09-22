@@ -123,7 +123,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "1.9.0"
+VERSION = "1.9.1"
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
@@ -2915,7 +2915,7 @@ class CodexVue(tk.Frame):
 
     def construire_conversation(self):
         """L'écran du milieu : une seule colonne, centrée, où tout se passe."""
-        zone = tk.Frame(self, bg=GRIS_FOND)
+        zone = self.zone_chat = tk.Frame(self, bg=GRIS_FOND)
         zone.pack(fill="both", expand=True)
         centre = tk.Frame(zone, bg=GRIS_FOND)
         centre.place(relx=0.5, rely=0, anchor="n", relwidth=LARGEUR, relheight=1)
@@ -2925,10 +2925,33 @@ class CodexVue(tk.Frame):
         defil.pack(side="right", fill="y", pady=(8, 10))
         self.chat.pack(side="left", fill="both", expand=True, pady=(8, 10))
         self.app.configurer_tags(self.chat, 12, taille_reponse=14)
-        self.chat.insert("end", "Dis-moi ce que tu veux changer dans ton projet. Pas besoin "
-                                "d'ouvrir les fichiers : j'trouve les bons tout seul, j'les lis "
-                                "pis j'les corrige. Tu vas voir chaque fichier touché icitte, "
-                                "avec ce qui a changé dedans.\n", "attente")
+        self.mot_accueil()
+
+    def mot_accueil(self):
+        """Le début d'une session : le logo Marceau au milieu de l'écran, le mot d'accueil dessous.
+
+        C'est posé par-dessus la conversation, pis ça s'efface à ta première demande.
+        """
+        # Même fond que la zone de conversation : sinon le cadre ferait une boîte grise
+        self.accueil = tk.Frame(self.zone_chat, bg=GRIS_ZONE)
+        self.accueil.place(relx=0.5, rely=0.44, anchor="center")
+        logo = getattr(self.app, "logo", None)
+        if logo is not None:
+            tk.Label(self.accueil, image=logo.image(LOGO_CENTRE), bg=GRIS_ZONE, bd=0,
+                     highlightthickness=0).pack()
+        tk.Label(self.accueil,
+                 text="Dis-moi ce que tu veux changer dans ton projet. Pas besoin d'ouvrir les "
+                      "fichiers : j'trouve les bons tout seul, j'les lis pis j'les corrige. "
+                      "Tu vas voir chaque fichier touché icitte, avec ce qui a changé dedans.",
+                 bg=GRIS_ZONE, fg=NOIR, font=(FAMILLE, 13, "italic"), justify="center",
+                 wraplength=520).pack(pady=(18, 0))
+        self.accueil.lift()
+
+    def effacer_accueil(self):
+        """Le logo d'accueil s'en va dès que la conversation commence."""
+        if getattr(self, "accueil", None) is not None:
+            self.accueil.destroy()
+            self.accueil = None
 
     def construire_saisie(self):
         """La boîte où tu écris, en bas au centre, comme dans le chat."""
@@ -3370,7 +3393,8 @@ class CodexVue(tk.Frame):
                 return "break"
         self.saisie.delete("1.0", "end")
         if not self.messages:
-            self.chat.delete("1.0", "end")   # enlève le mot d'accueil
+            self.effacer_accueil()           # le logo d'accueil s'en va
+            self.chat.delete("1.0", "end")
         self.chat.insert("end", question + "\n", "question")
         self.messages.append({"role": "user", "content": question})
         historique = [dict(m) for m in self.messages[-8:]]
