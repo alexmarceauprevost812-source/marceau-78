@@ -24,6 +24,7 @@ Thème gris mat, texte noir, boutons orange à coins ronds.
 | `logo.png` | le logo MARCEAU en 512 px, icône de fenêtre |
 | `logo_64.png` | le même en 64 px, pour la barre des tâches |
 | `logo_accueil.png` | le logo découpé en rond, affiché sur l'accueil |
+| `logo_marceau.png` | le logo de l'agent, en 320 px, qui glisse du centre vers la gauche |
 | `index.html` | la page de présentation publiée sur Vercel |
 | `vercel.json` | fait télécharger `ecriture.py` au lieu de l'afficher |
 | `captures/` | les deux captures d'écran utilisées par la page |
@@ -110,6 +111,16 @@ ignore la réponse en cours si elle arrive après coup.
 
 Le document du haut est éditable : on peut y corriger le texte avant de le
 sauvegarder en `.txt`.
+
+## Le logo de l'agent
+
+Au démarrage, le logo Marceau trône au-dessus de la boîte d'écriture. À la
+première question, il glisse vers la gauche en rapetissant, et se réinstalle
+en haut du document ; il revient au centre avec **Nouveau**. Un petit avatar
+du même logo précède chaque réponse.
+
+Pillow (`pip install pillow`) rend le redimensionnement plus doux, mais reste
+facultatif : sans lui, Tkinter divise la taille par un nombre entier.
 
 ## Le menu de gauche
 

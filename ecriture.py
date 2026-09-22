@@ -22,6 +22,11 @@ from bisect import bisect_right
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+try:   # Pillow rend le logo plus doux quand il change de taille (optionnel)
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = ImageTk = None
+
 # ---------- Couleurs & style (change-les ici) ----------
 GRIS_FOND = "#8c8c8c"      # fond gris mat
 GRIS_ZONE = "#a6a6a6"      # zones d'écriture, un peu plus pâles
@@ -47,6 +52,12 @@ MARGE = 25            # espace entre la zone d'écriture et le bas de l'écran
 LARGEUR = 0.70        # largeur des zones (70 % de la fenêtre)
 HAUT_DOC = 70         # où commence le texte en haut de l'écran
 LARGEUR_MENU = 270    # largeur du menu de gauche
+
+# ---------- Logo de l'agent ----------
+FICHIER_LOGO = Path(__file__).with_name("logo_marceau.png")   # le logo va à côté du script
+LOGO_CENTRE = 160     # taille du logo au milieu de l'écran, au début
+LOGO_GAUCHE = 110     # taille une fois rendu à gauche
+LOGO_AVATAR = 28      # petit logo devant chaque réponse de l'agent
 
 # ---------- Couleurs du code dans le Codex ----------
 CODE_FOND = "#262626"          # gris mat foncé
@@ -689,6 +700,67 @@ def barre_defilement(parent, orientation, fond=GRIS_MENU, command=None):
     return tk.Scrollbar(parent, orient=orientation, command=command, bg="#5f5f5f",
                         troughcolor=fond, activebackground=ORANGE, relief="flat", bd=0,
                         width=12, elementborderwidth=0, highlightthickness=0)
+
+
+# ---------- Le logo de l'agent ----------
+class LogoAgent:
+    """Le logo Marceau : au centre au début, il glisse à gauche quand l'agent commence à répondre."""
+    ETAPES = 32   # nombre d'images de l'animation (plus = plus lent et plus doux)
+
+    def __init__(self, app):
+        self.app = app
+        self.images = {}   # taille -> image
+        if Image is not None:
+            # « RGBa » : la transparence reste propre quand on rapetisse le logo
+            source = Image.open(FICHIER_LOGO).convert("RGBa")
+            for taille in set(range(LOGO_GAUCHE, LOGO_CENTRE + 1, 2)) | {LOGO_CENTRE, LOGO_AVATAR}:
+                petit = source.resize((taille, taille), Image.LANCZOS).convert("RGBA")
+                self.images[taille] = ImageTk.PhotoImage(petit, master=app)
+        else:
+            # Sans Pillow : Tkinter peut juste diviser la taille par un nombre entier
+            base = tk.PhotoImage(file=str(FICHIER_LOGO), master=app)
+            for facteur in range(2, 25):
+                image = base.subsample(facteur)
+                self.images[image.width()] = image
+        self.label = tk.Label(app, bg=GRIS_FOND, bd=0, highlightthickness=0)
+        self.position = "cache"
+
+    def image(self, taille):
+        return self.images[min(self.images, key=lambda t: abs(t - taille))]
+
+    def decalage_centre(self):
+        # Juste au-dessus de la boîte d'écriture centrée
+        self.app.update_idletasks()
+        return -(self.app.zone_saisie.winfo_reqheight() / 2 + 22 + LOGO_CENTRE / 2)
+
+    def au_centre(self):
+        self.label.config(image=self.image(LOGO_CENTRE))
+        self.label.place(relx=0.5, rely=0.5, x=0, y=self.decalage_centre(), anchor="center")
+        self.position = "centre"
+
+    def a_gauche(self):
+        self.label.config(image=self.image(LOGO_GAUCHE))
+        self.label.place(relx=(1 - LARGEUR) / 4, rely=0, x=0, y=HAUT_DOC + LOGO_GAUCHE / 2,
+                         anchor="center")
+        self.position = "gauche"
+
+    def glisser(self, vers_gauche=True):
+        """Fait glisser le logo en douceur (il rapetisse en allant à gauche, grossit en revenant)."""
+        app = self.app
+        app.update_idletasks()
+        largeur, hauteur = app.winfo_width(), app.winfo_height()
+        centre = (largeur / 2, hauteur / 2 + self.decalage_centre(), LOGO_CENTRE)
+        gauche = (largeur * (1 - LARGEUR) / 4, HAUT_DOC + LOGO_GAUCHE / 2, LOGO_GAUCHE)
+        (x0, y0, t0), (x1, y1, t1) = (centre, gauche) if vers_gauche else (gauche, centre)
+        self.position = "en route"
+
+        def appliquer(p):
+            self.label.config(image=self.image(t0 + (t1 - t0) * p))
+            self.label.place(relx=0, rely=0, x=x0 + (x1 - x0) * p, y=y0 + (y1 - y0) * p,
+                             anchor="center")
+
+        app.animer("logo", 0.0, 1.0, appliquer, self.a_gauche if vers_gauche else self.au_centre,
+                   etapes=self.ETAPES, ms=14, douce=True)
 
 
 # ---------- Un fichier ouvert dans l'éditeur du Codex ----------
@@ -1438,9 +1510,17 @@ class AppEcriture(tk.Tk):
         bouton_orange(self.barre, "Sauvegarder", self.sauvegarder).pack(side="left", padx=(0, 10))
         bouton_orange(self.barre, "Nouveau", self.nouveau).pack(side="left")
 
+        # --- Le logo de l'agent (s'il est à côté du script) ---
+        self.logo = None
+        if FICHIER_LOGO.exists():
+            try:
+                self.logo = LogoAgent(self)
+            except Exception as e:
+                print("Logo pas chargé :", e)
+
         # --- La conversation (cachée au début, modifiable) ---
         self.document = tk.Text(self, **style_zone())
-        self.configurer_tags(self.document)
+        self.configurer_tags(self.document, retrait=LOGO_AVATAR + 12 if self.logo else 0)
 
         # --- La zone où on écrit (centrée au début) ---
         self.zone_saisie = tk.Frame(self, bg=GRIS_FOND)
@@ -1470,26 +1550,35 @@ class AppEcriture(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.quitter)
 
         self.centrer_saisie()
+        if self.logo:
+            self.logo.au_centre()
         self.saisie.focus_set()
         self.after(80, self.traiter_taches)
 
     # ---------- Outils ----------
-    def configurer_tags(self, widget, taille=14):
+    def configurer_tags(self, widget, taille=14, retrait=0):
         widget.tag_configure("question", font=(FAMILLE, taille, "bold"), spacing1=14 if taille >= 14 else 10)
-        widget.tag_configure("reponse", spacing1=6, spacing3=4)
-        widget.tag_configure("attente", font=(FAMILLE, taille, "italic"), spacing1=6)
-        widget.tag_configure("sources", font=(FAMILLE, max(taille - 3, 9)), spacing1=2)
+        widget.tag_configure("reponse", spacing1=6, spacing3=4, lmargin1=retrait, lmargin2=retrait)
+        widget.tag_configure("attente", font=(FAMILLE, taille, "italic"), spacing1=6, lmargin2=retrait)
+        widget.tag_configure("sources", font=(FAMILLE, max(taille - 3, 9)), spacing1=2,
+                             lmargin1=retrait, lmargin2=retrait)
+        widget.tag_configure("avatar", spacing1=8)
         widget.tag_configure("lien", underline=True)
         widget.tag_configure("curseur", foreground=ORANGE)
         widget.tag_bind("lien", "<Enter>", lambda e: widget.config(cursor="hand2"))
         widget.tag_bind("lien", "<Leave>", lambda e: widget.config(cursor="xterm"))
 
-    def animer(self, cle, depart, fin, appliquer, apres=None, etapes=14, ms=12):
-        """Anime une valeur en douceur (ralentit à la fin). Une nouvelle animation remplace l'ancienne."""
+    def animer(self, cle, depart, fin, appliquer, apres=None, etapes=14, ms=12, douce=False):
+        """Anime une valeur en douceur. Une nouvelle animation remplace l'ancienne.
+        douce=True : part doucement, accélère, pis ralentit en arrivant."""
         self.annuler_animation(cle)
 
         def pas(i):
-            t = 1 - (1 - i / etapes) ** 3
+            x = i / etapes
+            if douce:
+                t = 4 * x ** 3 if x < 0.5 else 1 - (-2 * x + 2) ** 3 / 2
+            else:
+                t = 1 - (1 - x) ** 3
             appliquer(depart + (fin - depart) * t)
             if i < etapes:
                 self._anims[cle] = self.after(ms, pas, i + 1)
@@ -1706,10 +1795,14 @@ class AppEcriture(tk.Tk):
             self.invite.pack_forget()
             self.saisie_en_bas()
             self.afficher_document()
+        if self.logo:
+            self.annuler_animation("logo")
+            self.logo.a_gauche()
         for m in self.messages:
             if m["role"] == "user":
                 self.document.insert("end", m["content"] + "\n", "question")
             else:
+                self.avatar()
                 self.document.insert("end", m["content"] + "\n", "reponse")
                 self.ajouter_schema_et_sources(m.get("etapes") or [],
                                                [tuple(s) for s in m.get("sources") or []])
@@ -1820,6 +1913,8 @@ class AppEcriture(tk.Tk):
 
         if self.premiere_ligne:
             self.premiere_ligne = False
+            if self.logo:
+                self.logo.glisser(vers_gauche=True)
             self.descendre()
         self.document.see("end")
         return "break"
@@ -1895,8 +1990,16 @@ class AppEcriture(tk.Tk):
         if index_a_montrer:
             self.document.see(index_a_montrer)   # montre le haut du schéma
 
+    def avatar(self):
+        """Petit logo Marceau devant la réponse de l'agent."""
+        if self.logo:
+            index = self.document.index("end-1c")
+            self.document.image_create(index, image=self.logo.image(LOGO_AVATAR), padx=3, align="center")
+            self.document.tag_add("avatar", index)
+
     def montrer_attente(self, nom):
         self.compteur = 0
+        self.avatar()
         self.texte_attente = f"{nom} réfléchit"
         self.document.insert("end", self.texte_attente + "\n", "attente")
 
@@ -1953,6 +2056,8 @@ class AppEcriture(tk.Tk):
             self.invite.pack(pady=(0, 14), before=self.ligne)
         self.premiere_ligne = True
         self.centrer_saisie()
+        if self.logo and self.logo.position != "centre":
+            self.logo.glisser(vers_gauche=False)
         self.saisie.focus_set()
         self.fermer_menu()
 
