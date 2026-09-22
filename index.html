@@ -19,7 +19,7 @@
     --r: 18px;
   }
   * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
+  html { -webkit-text-size-adjust: 100%; overflow-x: hidden; }
   body {
     margin: 0;
     background: var(--fond);
@@ -35,6 +35,7 @@
     text-align: center;
     padding: 72px 0 56px;
     position: relative;
+    overflow: hidden;          /* la lueur reste dans le bandeau */
   }
   .accueil::before {
     content: "";
@@ -190,11 +191,6 @@
     <figure>
       <img src="/captures/schema.png" alt="Une réponse avec un schéma de plan : quatre étapes numérotées reliées par des flèches où circule un courant vert" width="1000" height="700">
       <figcaption>Quand la réponse décrit des étapes, elles se redessinent en schéma animé.</figcaption>
-    </figure>
-
-    <figure>
-      <img src="/captures/moteurs.png" alt="Le menu de choix de l'IA, ouvert au-dessus de la boîte de saisie" width="1000" height="700">
-      <figcaption>Le menu liste les modèles Ollama installés, relus à chaque ouverture.</figcaption>
     </figure>
   </div>
 </section>

@@ -26,7 +26,7 @@ Thème gris mat, texte noir, boutons orange à coins ronds.
 | `logo_accueil.png` | le logo découpé en rond, affiché sur l'accueil |
 | `index.html` | la page de présentation publiée sur Vercel |
 | `vercel.json` | fait télécharger `ecriture.py` au lieu de l'afficher |
-| `captures/` | les captures d'écran utilisées par la page |
+| `captures/` | les deux captures d'écran utilisées par la page |
 
 Les trois PNG sont cherchés à côté du script. S'ils manquent, l'application
 démarre quand même, sans icône ni logo.
