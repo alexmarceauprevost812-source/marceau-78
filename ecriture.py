@@ -65,6 +65,7 @@ LARGEUR_MENU = 270    # largeur du menu de gauche
 
 # ---------- Logo de l'agent ----------
 FICHIER_LOGO = Path(__file__).with_name("logo_marceau.png")   # le logo va à côté du script
+FICHIERS_ICONE = ("logo.png", "logo_192.png", "logo_marceau.png", "logo_64.png")
 LOGO_CENTRE = 160     # taille du logo au milieu de l'écran, au début
 LOGO_GAUCHE = 110     # taille une fois rendu à gauche
 LOGO_AVATAR = 34      # petit logo devant chaque réponse de l'agent
@@ -124,7 +125,8 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.1.0"
+VERSION = "2.2.0"
+HEURES_MAJ = 6         # on revérifie les mises à jour aux 6 heures, même si l'app reste ouverte
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
@@ -2033,6 +2035,379 @@ def traduire_texte(texte, de, vers):
     return (resultat or "").strip()
 
 
+# ---------- Le moteur de fichiers : faire un document qu'on peut envoyer ----------
+# Tout est écrit à la main avec la bibliothèque standard : pas de librairie à installer.
+DOSSIER_FICHIERS = Path.home() / ".local" / "share" / "ecriture" / "fichiers"
+
+PDF_LARGEUR, PDF_HAUTEUR = 595, 842     # une page A4, en points
+PDF_MARGE = 56                          # 2 cm de marge
+PDF_CORPS, PDF_INTERLIGNE = 11, 15.5
+PDF_TITRE = 20
+
+# Largeur de chaque lettre en Helvetica (millièmes de la taille), des codes 32 à 126.
+# C'est ce qui permet de couper les lignes au bon endroit, sans police à installer.
+LARGEURS_HELVETICA = (
+    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278,
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556,
+    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,
+    333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
+    556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584)
+LARGEURS_HELVETICA_GRAS = (
+    278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278,
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611,
+    975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778,
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556,
+    333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611,
+    611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584)
+
+
+def _largeur_lettre(c, table):
+    """Largeur d'une lettre. « é » est large comme « e » : les accents changent rien."""
+    code = ord(c)
+    if 32 <= code <= 126:
+        return table[code - 32]
+    sans = unicodedata.normalize("NFD", c)[:1]
+    code = ord(sans) if sans else 110
+    return table[code - 32] if 32 <= code <= 126 else table[ord("n") - 32]
+
+
+def largeur_texte(texte, taille, gras=False):
+    table = LARGEURS_HELVETICA_GRAS if gras else LARGEURS_HELVETICA
+    return sum(_largeur_lettre(c, table) for c in texte) * taille / 1000
+
+
+def couper_lignes(texte, taille, largeur_max, gras=False):
+    """Coupe le texte pour qu'il rentre dans la largeur, sans couper les mots en deux."""
+    lignes = []
+    for paragraphe in texte.split("\n"):
+        if not paragraphe.strip():
+            lignes.append("")
+            continue
+        ligne = ""
+        for mot in paragraphe.split(" "):
+            essai = f"{ligne} {mot}".strip()
+            if ligne and largeur_texte(essai, taille, gras) > largeur_max:
+                lignes.append(ligne)
+                ligne = mot
+            else:
+                ligne = essai
+            # Un mot plus long que la ligne (une longue adresse web) : on le coupe
+            while largeur_texte(ligne, taille, gras) > largeur_max and len(ligne) > 1:
+                coupe = len(ligne) - 1
+                while coupe > 1 and largeur_texte(ligne[:coupe], taille, gras) > largeur_max:
+                    coupe -= 1
+                lignes.append(ligne[:coupe])
+                ligne = ligne[coupe:]
+        lignes.append(ligne)
+    return lignes
+
+
+def _texte_pdf(texte):
+    """Encode le texte comme le PDF l'attend (WinAnsi), avec les parenthèses protégées."""
+    brut = texte.encode("cp1252", "replace")
+    for avant, apres in ((b"\\", b"\\\\"), (b"(", b"\\("), (b")", b"\\)")):
+        brut = brut.replace(avant, apres)
+    return brut
+
+
+def _jpeg_pour_pdf(image):
+    """Le PDF sait lire le JPEG tel quel : on lui donne les octets sans les retoucher."""
+    copie = image.convert("RGB")
+    copie.thumbnail((1600, 1600))
+    tampon = io.BytesIO()
+    copie.save(tampon, "JPEG", quality=85)
+    return tampon.getvalue(), copie.width, copie.height
+
+
+def ecrire_pdf(chemin, titre, blocs):
+    """Écrit un vrai PDF : un titre, des paragraphes, des images. Retourne le nombre de pages.
+
+    blocs : liste de ("texte", "…") et ("image", une image Pillow).
+    """
+    largeur_utile = PDF_LARGEUR - 2 * PDF_MARGE
+    pages, page, y = [], [], PDF_HAUTEUR - PDF_MARGE
+    images_pdf = []            # (octets JPEG, largeur, hauteur)
+
+    def nouvelle_page():
+        nonlocal page, y
+        if page:
+            pages.append(page)
+        page, y = [], PDF_HAUTEUR - PDF_MARGE
+
+    def place(hauteur):
+        """Assure qu'il reste la place voulue, sinon passe à la page suivante."""
+        nonlocal y
+        if y - hauteur < PDF_MARGE:
+            nouvelle_page()
+
+    if titre.strip():
+        for ligne in couper_lignes(titre.strip(), PDF_TITRE, largeur_utile, gras=True):
+            place(PDF_TITRE * 1.3)
+            y -= PDF_TITRE
+            page.append(("texte", PDF_MARGE, y, ligne, PDF_TITRE, True))
+            y -= PDF_TITRE * 0.3
+        y -= PDF_INTERLIGNE
+
+    for sorte, valeur in blocs:
+        if sorte == "texte":
+            for ligne in couper_lignes(valeur, PDF_CORPS, largeur_utile):
+                place(PDF_INTERLIGNE)
+                y -= PDF_INTERLIGNE
+                if ligne:
+                    page.append(("texte", PDF_MARGE, y, ligne, PDF_CORPS, False))
+        elif sorte == "image" and Image is not None:
+            octets, li, hi = _jpeg_pour_pdf(valeur)
+            largeur = min(largeur_utile, li)
+            hauteur = hi * largeur / li
+            maxi = PDF_HAUTEUR - 2 * PDF_MARGE
+            if hauteur > maxi:                       # une image très haute rentre quand même
+                hauteur, largeur = maxi, largeur * maxi / hauteur
+            place(hauteur + 12)
+            y -= hauteur + 6
+            images_pdf.append(octets)
+            page.append(("image", PDF_MARGE + (largeur_utile - largeur) / 2, y,
+                         largeur, hauteur, len(images_pdf) - 1))
+            y -= 8
+    if page or not pages:
+        pages.append(page)
+
+    # ----- On assemble les objets du PDF -----
+    n_pages = len(pages)
+    premier_contenu = 5
+    premiere_image = premier_contenu + n_pages
+    premiere_page = premiere_image + len(images_pdf)
+    objets = {}
+
+    objets[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
+    enfants = b" ".join(f"{premiere_page + i} 0 R".encode() for i in range(n_pages))
+    objets[2] = (b"<< /Type /Pages /Count " + str(n_pages).encode()
+                 + b" /Kids [" + enfants + b"] >>")
+    objets[3] = (b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+                 b"/Encoding /WinAnsiEncoding >>")
+    objets[4] = (b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold "
+                 b"/Encoding /WinAnsiEncoding >>")
+
+    for i, octets in enumerate(images_pdf):
+        largeur, hauteur = Image.open(io.BytesIO(octets)).size
+        objets[premiere_image + i] = (
+            b"<< /Type /XObject /Subtype /Image /Width " + str(largeur).encode()
+            + b" /Height " + str(hauteur).encode()
+            + b" /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length "
+            + str(len(octets)).encode() + b" >>\nstream\n" + octets + b"\nendstream")
+
+    for i, contenu_page in enumerate(pages):
+        morceaux, utilisees = [], []
+        for element in contenu_page:
+            if element[0] == "texte":
+                _, x, ty, ligne, taille, gras = element
+                morceaux.append(b"BT /" + (b"F2" if gras else b"F1") + b" "
+                                + f"{taille:g}".encode() + b" Tf "
+                                + f"{x:.1f} {ty:.1f}".encode() + b" Td ("
+                                + _texte_pdf(ligne) + b") Tj ET")
+            else:
+                _, x, iy, largeur, hauteur, indice = element
+                nom = f"Im{indice}".encode()
+                utilisees.append((nom, premiere_image + indice))
+                morceaux.append(b"q " + f"{largeur:.2f} 0 0 {hauteur:.2f} {x:.2f} {iy:.2f}".encode()
+                                + b" cm /" + nom + b" Do Q")
+        flux = b"\n".join(morceaux)
+        objets[premier_contenu + i] = (b"<< /Length " + str(len(flux)).encode() + b" >>\nstream\n"
+                                       + flux + b"\nendstream")
+        xobjets = b""
+        if utilisees:
+            xobjets = (b" /XObject << " + b" ".join(b"/" + nom + b" " + str(num).encode() + b" 0 R"
+                                                    for nom, num in utilisees) + b" >>")
+        objets[premiere_page + i] = (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 "
+            + f"{PDF_LARGEUR} {PDF_HAUTEUR}".encode() + b"] /Resources << /Font << /F1 3 0 R "
+            b"/F2 4 0 R >>" + xobjets + b" >> /Contents "
+            + str(premier_contenu + i).encode() + b" 0 R >>")
+
+    sortie = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    positions = {}
+    for numero in sorted(objets):
+        positions[numero] = len(sortie)
+        sortie += str(numero).encode() + b" 0 obj\n" + objets[numero] + b"\nendobj\n"
+    debut_xref = len(sortie)
+    total = max(objets) + 1
+    sortie += b"xref\n0 " + str(total).encode() + b"\n0000000000 65535 f \n"
+    for numero in range(1, total):
+        sortie += f"{positions[numero]:010d} 00000 n \n".encode()
+    sortie += (b"trailer\n<< /Size " + str(total).encode() + b" /Root 1 0 R >>\nstartxref\n"
+               + str(debut_xref).encode() + b"\n%%EOF\n")
+    Path(chemin).write_bytes(bytes(sortie))
+    return n_pages
+
+
+def ecrire_html(chemin, titre, blocs):
+    """Une page web d'un seul fichier : les images sont dedans, ça s'ouvre partout."""
+    def proteger(t):
+        return (t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    corps = []
+    for sorte, valeur in blocs:
+        if sorte == "texte":
+            for paragraphe in valeur.split("\n"):
+                corps.append(f"<p>{proteger(paragraphe)}</p>" if paragraphe.strip() else "")
+        elif sorte == "image" and Image is not None:
+            donnees = image_pour_ia(valeur)
+            corps.append(f'<img src="data:{donnees["media_type"]};base64,{donnees["data"]}" alt="">')
+    Path(chemin).write_text(
+        "<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"utf-8\">\n"
+        f"<title>{proteger(titre) or 'Document'}</title>\n"
+        "<style>\n"
+        f"  body {{ background: {GRIS_FOND}; color: {NOIR}; font-family: system-ui, sans-serif;\n"
+        "         margin: 0; padding: 40px 20px; line-height: 1.6; }\n"
+        f"  main {{ max-width: 760px; margin: 0 auto; background: {GRIS_ZONE};\n"
+        "          padding: 40px; border-radius: 14px; }\n"
+        f"  h1 {{ margin-top: 0; border-bottom: 3px solid {ORANGE}; padding-bottom: 12px; }}\n"
+        "  img { max-width: 100%; height: auto; border-radius: 10px; margin: 18px 0;\n"
+        "        display: block; }\n"
+        "  p { margin: 0 0 14px; white-space: pre-wrap; }\n"
+        "</style>\n</head>\n<body>\n<main>\n"
+        + (f"<h1>{proteger(titre)}</h1>\n" if titre.strip() else "")
+        + "\n".join(corps)
+        + "\n</main>\n</body>\n</html>\n", encoding="utf-8")
+    return 1
+
+
+def ecrire_texte(chemin, titre, blocs):
+    """Du texte brut. Les images sont nommées, pas incluses : un .txt en contient pas."""
+    parties = []
+    if titre.strip():
+        parties.append(titre.strip() + "\n" + "=" * len(titre.strip()))
+    images = 0
+    for sorte, valeur in blocs:
+        if sorte == "texte":
+            parties.append(valeur.strip("\n"))
+        else:
+            images += 1
+            parties.append(f"[Image {images}]")
+    texte = "\n\n".join(p for p in parties if p) + "\n"
+    Path(chemin).write_text(texte, encoding="utf-8")
+    return images
+
+
+FORMATS = (
+    ("pdf", "PDF — à imprimer ou à remettre", ".pdf", [("PDF", "*.pdf")], ecrire_pdf),
+    ("html", "Page web — un seul fichier, images dedans", ".html", [("Page web", "*.html")], ecrire_html),
+    ("txt", "Texte brut — sans les images", ".txt", [("Texte", "*.txt")], ecrire_texte),
+)
+
+
+class FenetreFichier(tk.Toplevel):
+    """« Fichier ▸ Créer » : tu bâtis un document, tu choisis le format, pis tu l'envoies."""
+
+    def __init__(self, app, titre, contenu, images):
+        super().__init__(app, bg=GRIS_MENU)
+        self.app, self.images = app, images
+        self.title("Créer un fichier")
+        self.transient(app)
+        self.minsize(620, 520)
+        cadre = tk.Frame(self, bg=GRIS_MENU)
+        cadre.pack(fill="both", expand=True, padx=20, pady=18)
+
+        tk.Label(cadre, text="Titre du document", bg=GRIS_MENU, fg=NOIR, anchor="w",
+                 font=(FAMILLE, 11, "bold")).pack(fill="x")
+        self.titre = tk.Entry(cadre, bg=GRIS_ZONE, fg=NOIR, insertbackground=NOIR, relief="flat",
+                              bd=0, font=(FAMILLE, 12), highlightthickness=2,
+                              highlightbackground=GRIS_BORD, highlightcolor=ORANGE)
+        self.titre.insert(0, titre)
+        self.titre.pack(fill="x", ipady=6, pady=(4, 14))
+
+        tk.Label(cadre, text="Ce qu'il y a dedans", bg=GRIS_MENU, fg=NOIR, anchor="w",
+                 font=(FAMILLE, 11, "bold")).pack(fill="x")
+        zone = tk.Frame(cadre, bg=GRIS_MENU)
+        zone.pack(fill="both", expand=True, pady=(4, 14))
+        defil = barre_defilement(zone, "vertical")
+        self.contenu = tk.Text(zone, height=10, width=1, yscrollcommand=defil.set, **style_zone(12))
+        defil.config(command=self.contenu.yview)
+        defil.pack(side="right", fill="y")
+        self.contenu.pack(side="left", fill="both", expand=True)
+        self.contenu.insert("1.0", contenu)
+
+        self.choix_images = []
+        if images:
+            tk.Label(cadre, text=f"Les images de la conversation ({len(images)})", bg=GRIS_MENU,
+                     fg=NOIR, anchor="w", font=(FAMILLE, 11, "bold")).pack(fill="x")
+            rangee = tk.Frame(cadre, bg=GRIS_MENU)
+            rangee.pack(fill="x", pady=(6, 14))
+            self.vignettes = []
+            for i, image in enumerate(images[:8]):
+                case = tk.BooleanVar(value=True)
+                self.choix_images.append(case)
+                boite = tk.Frame(rangee, bg=GRIS_MENU)
+                boite.pack(side="left", padx=(0, 10))
+                # Un carré fixe : une image large pis une image carrée gardent leurs cases alignées
+                carre = tk.Frame(boite, bg=GRIS_MENU, width=76, height=76)
+                carre.pack()
+                carre.pack_propagate(False)
+                vignette = vignette_tk(image, 72, 72)
+                self.vignettes.append(vignette)
+                tk.Label(carre, image=vignette, bg=GRIS_MENU).place(relx=0.5, rely=0.5, anchor="center")
+                tk.Checkbutton(boite, text=f"Image {i + 1}", variable=case, bg=GRIS_MENU, fg=NOIR,
+                               activebackground=GRIS_MENU, activeforeground=NOIR,
+                               selectcolor=GRIS_ZONE, font=(FAMILLE, 9), relief="flat", bd=0,
+                               highlightthickness=0, cursor="hand2").pack()
+
+        tk.Label(cadre, text="Sorte de fichier", bg=GRIS_MENU, fg=NOIR, anchor="w",
+                 font=(FAMILLE, 11, "bold")).pack(fill="x")
+        self.format = tk.StringVar(value="pdf")
+        for cle, description, *_ in FORMATS:
+            tk.Radiobutton(cadre, text=description, variable=self.format, value=cle, bg=GRIS_MENU,
+                           fg=NOIR, activebackground=GRIS_MENU, activeforeground=NOIR,
+                           selectcolor=GRIS_ZONE, font=(FAMILLE, 10), anchor="w", relief="flat",
+                           bd=0, highlightthickness=0, cursor="hand2").pack(fill="x", padx=2)
+
+        boutons = tk.Frame(cadre, bg=GRIS_MENU)
+        boutons.pack(fill="x", pady=(16, 0))
+        bouton_orange(boutons, "Créer le fichier", self.creer).pack(side="left")
+        bouton_orange(boutons, "Annuler", self.destroy, taille=9).pack(side="left", padx=(10, 0))
+        self.mot = tk.Label(boutons, text="", bg=GRIS_MENU, fg=NOIR, font=(FAMILLE, 9), anchor="w")
+        self.mot.pack(side="left", padx=(14, 0), fill="x", expand=True)
+
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.update_idletasks()
+        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_reqwidth()) // 2
+        y = app.winfo_rooty() + max(20, (app.winfo_height() - self.winfo_reqheight()) // 3)
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.titre.focus_set()
+
+    def blocs(self):
+        """Ce qui va dans le fichier : ton texte, pis les images que t'as cochées."""
+        texte = self.contenu.get("1.0", "end-1c").strip()
+        blocs = [("texte", texte)] if texte else []
+        for case, image in zip(self.choix_images, self.images):
+            if case.get():
+                blocs.append(("image", image))
+        return blocs
+
+    def creer(self):
+        blocs = self.blocs()
+        if not blocs:
+            self.mot.config(text="Écris quelque chose, ou coche une image.")
+            return
+        cle = self.format.get()
+        _, _, extension, types, ecrire = next(f for f in FORMATS if f[0] == cle)
+        titre = self.titre.get().strip()
+        DOSSIER_FICHIERS.mkdir(parents=True, exist_ok=True)
+        propose = re.sub(r'[<>:"/\\|?*]', "-", titre)[:60].strip() or "document"
+        chemin = filedialog.asksaveasfilename(
+            title="Créer le fichier", parent=self, defaultextension=extension,
+            initialdir=str(DOSSIER_FICHIERS), initialfile=propose + extension,
+            filetypes=types + [("Tous les fichiers", "*.*")])
+        if not chemin:
+            return
+        try:
+            ecrire(chemin, titre, blocs)
+        except Exception as e:
+            messagebox.showerror("Créer un fichier", f"Ça n'a pas marché : {e}", parent=self)
+            return
+        self.app.fichier_cree(chemin)
+        self.destroy()
+
+
 # ---------- Moteur de schéma ----------
 MOTS_PLAN = re.compile(
     r"\b(plan|étapes?|etapes?|stratégie|marche à suivre|comment (faire|je|on|lancer|commencer))\b",
@@ -3681,6 +4056,8 @@ class AppEcriture(tk.Tk):
         self.barre = tk.Frame(self, bg=GRIS_FOND)
         bouton_orange(self.barre, "Sauvegarder", self.sauvegarder).pack(side="left", padx=(0, 10))
         bouton_orange(self.barre, "Nouveau", self.nouveau).pack(side="left")
+        self.bouton_fichier = bouton_orange(self.barre, "Fichier  \u25be", self.ouvrir_menu_fichier)
+        self.bouton_fichier.pack(side="left", padx=(10, 0))
         self.bouton_magie = bouton_orange(self.barre, "\u2728  Magie", self.ouvrir_menu_magie)
         self.bouton_magie.pack(side="left", padx=(10, 0))
 
@@ -3738,10 +4115,17 @@ class AppEcriture(tk.Tk):
         self.centrer_saisie()
         if self.logo:
             self.logo.au_centre()
+        self.mettre_icone()
         self.saisie.focus_set()
         self.after(80, self.traiter_taches)
         self.after(300, self.charger_modeles_claude)
         self.after(1500, self.verifier_maj)   # sans déranger : ça se fait en arrière-plan
+        self.after(HEURES_MAJ * 3600_000, self.remaj)   # pis on revérifie de temps en temps
+
+    def remaj(self):
+        """L'app peut rester ouverte des jours : on revérifie sans attendre un redémarrage."""
+        self.verifier_maj()
+        self.after(HEURES_MAJ * 3600_000, self.remaj)
 
     def moteur_de_depart(self):
         """Un modèle gratuit s'il y en a un, sinon celui écrit dans MODELE_CLAUDE.
@@ -4653,6 +5037,129 @@ class AppEcriture(tk.Tk):
         self.document.image_create(index, image=self.logo.image(LOGO_AVATAR), padx=3, align="center")
         self.document.tag_add("avatar", index)
         return index
+
+    # ---------- L'icône de la fenêtre : le logo Marceau ----------
+    def mettre_icone(self):
+        """Le logo Marceau devient l'icône de la fenêtre pis de la barre des tâches."""
+        for nom in FICHIERS_ICONE:
+            chemin = Path(__file__).with_name(nom)
+            if not chemin.exists():
+                continue
+            try:
+                if Image is not None:
+                    source = Image.open(chemin).convert("RGBA")
+                    self.icones = [ImageTk.PhotoImage(source.resize((t, t), Image.LANCZOS), master=self)
+                                   for t in (64, 128)]
+                else:
+                    self.icones = [tk.PhotoImage(file=str(chemin), master=self)]
+                self.iconphoto(True, *self.icones)   # True : les autres fenêtres l'héritent
+                return
+            except Exception:
+                continue   # ce fichier-là marche pas : on essaie le suivant
+
+    # ---------- Le menu Fichier ----------
+    def ouvrir_menu_fichier(self):
+        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+                       activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
+        menu.add_command(label="➕  Créer un fichier…", command=self.creer_fichier)
+        menu.add_separator()
+        menu.add_command(label="\U0001f4c1  Mes fichiers", command=self.mes_fichiers)
+        b = self.bouton_fichier
+        menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+
+    def images_de_la_conversation(self):
+        """Toutes les images de la conversation, dans l'ordre : les tiennes pis celles du Studio."""
+        if Image is None:
+            return []
+        chemins = []
+        for m in self.messages:
+            for c in m.get("images") or []:
+                chemins.append(c)
+            studio = m.get("studio") or {}
+            for c in (studio.get("apres"), studio.get("avant")):
+                if c and c not in chemins:
+                    chemins.append(c)
+                    break     # l'après suffit; l'avant sert juste s'il n'y a pas d'après
+        images = []
+        for c in dict.fromkeys(chemins):
+            try:
+                images.append(ouvrir_image(c))
+            except Exception:
+                pass          # l'image a été effacée de l'ordi
+        return images
+
+    def creer_fichier(self):
+        """« Fichier ▸ Créer » : ce que t'as écrit devient un document à envoyer."""
+        self.montrer_document()
+        texte, _, _ = self.texte_choisi()
+        titre = ""
+        for m in self.messages:
+            if m["role"] == "user" and m["content"].strip():
+                titre = " ".join(m["content"].split())[:60]
+                break
+        FenetreFichier(self, titre or "Mon document", texte, self.images_de_la_conversation())
+
+    def fichier_cree(self, chemin):
+        """Quand le fichier est écrit : on le dit, pis on offre de l'ouvrir."""
+        chemin = Path(chemin)
+        taille = taille_lisible(chemin.stat().st_size)
+        self.dire_magie(f"Fichier créé : {chemin}  ({taille})")
+        if messagebox.askyesno("Fichier créé",
+                               f"{chemin.name} est prêt ({taille}).\n\n{chemin}\n\nL'ouvrir?",
+                               parent=self):
+            self.ouvrir_dehors(chemin)
+
+    def ouvrir_dehors(self, chemin):
+        """Ouvre un fichier ou un dossier avec le programme du système."""
+        try:
+            webbrowser.open(Path(chemin).resolve().as_uri())
+        except Exception as e:
+            messagebox.showinfo("Ouvrir", f"J'ai pas réussi à l'ouvrir : {e}\n\n{chemin}", parent=self)
+
+    def mes_fichiers(self):
+        """La liste des fichiers que t'as créés : « on retrouve »."""
+        fichiers = sorted(DOSSIER_FICHIERS.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True) \
+            if DOSSIER_FICHIERS.exists() else []
+        fichiers = [f for f in fichiers if f.is_file()]
+        fen = tk.Toplevel(self, bg=GRIS_MENU)
+        fen.title("Mes fichiers")
+        fen.geometry("620x440")
+        fen.transient(self)
+        cadre = tk.Frame(fen, bg=GRIS_MENU)
+        cadre.pack(fill="both", expand=True, padx=18, pady=16)
+        tk.Label(cadre, text=str(DOSSIER_FICHIERS), bg=GRIS_MENU, fg="#2e2e2e", anchor="w",
+                 font=(FAMILLE, 9)).pack(fill="x", pady=(0, 8))
+        if not fichiers:
+            tk.Label(cadre, text="Aucun fichier encore. Fais-en un avec « Créer un fichier… ».",
+                     bg=GRIS_MENU, fg=NOIR, font=(FAMILLE, 12)).pack(pady=30)
+        zone = tk.Frame(cadre, bg=GRIS_MENU)
+        zone.pack(fill="both", expand=True)
+        liste = tk.Listbox(zone, bg=GRIS_MENU, fg=NOIR, selectbackground=ORANGE,
+                           selectforeground=NOIR, font=(FAMILLE, 11), relief="flat", bd=0,
+                           highlightthickness=0, activestyle="none")
+        defil = barre_defilement(zone, "vertical", command=liste.yview)
+        liste.config(yscrollcommand=defil.set)
+        defil.pack(side="right", fill="y")
+        liste.pack(side="left", fill="both", expand=True)
+        for f in fichiers:
+            quand = datetime.datetime.fromtimestamp(f.stat().st_mtime).strftime("%d %b %Y, %H:%M")
+            liste.insert("end", f"  {f.name}   —   {taille_lisible(f.stat().st_size)}   —   {quand}")
+
+        def ouvrir(*_):
+            choix = liste.curselection()
+            if choix:
+                self.ouvrir_dehors(fichiers[choix[0]])
+
+        liste.bind("<Double-Button-1>", ouvrir)
+        liste.bind("<Return>", ouvrir)
+        boutons = tk.Frame(cadre, bg=GRIS_MENU)
+        boutons.pack(fill="x", pady=(12, 0))
+        bouton_orange(boutons, "Ouvrir", ouvrir).pack(side="left")
+        bouton_orange(boutons, "Ouvrir le dossier",
+                      lambda: self.ouvrir_dehors(DOSSIER_FICHIERS), taille=9).pack(side="left", padx=(10, 0))
+        bouton_orange(boutons, "Fermer", fen.destroy, taille=9).pack(side="right")
+        fen.bind("<Escape>", lambda e: fen.destroy())
+
 
     # ---------- Les pouvoirs magiques ----------
     def construire_menu_magie(self):

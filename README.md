@@ -29,7 +29,7 @@ Thème gris mat, texte noir, boutons orange à coins ronds.
 | --- | --- |
 | `ecriture.py` | toute l'application |
 | `requirements.txt` | ce qu'il faut installer pour les images et les pouvoirs magiques |
-| `logo.png` | le logo MARCEAU en 512 px, icône de fenêtre |
+| `logo.png` | le logo MARCEAU en 512 px : c'est l'icône de la fenêtre et de la barre des tâches |
 | `logo_64.png` | le même en 64 px, pour la barre des tâches |
 | `logo_accueil.png` | le logo découpé en rond, affiché sur l'accueil |
 | `logo_marceau.png` | le logo de l'agent, en 320 px, qui glisse du centre vers la gauche |
@@ -64,6 +64,42 @@ Les images et les sept **pouvoirs magiques** demandent chacun leur
 bibliothèque — voir `requirements.txt` et la section
 [Les pouvoirs magiques](#les-pouvoirs-magiques--magie). Rien n'est
 obligatoire : ce qui manque est simplement expliqué au lieu de planter.
+
+## Faire un fichier à envoyer (Fichier ▸ Créer)
+
+Le bouton **Fichier** de la barre du haut transforme ce que t'as écrit en un
+document que tu peux remettre ou envoyer — un devoir, un rapport, une note.
+
+**Fichier ▸ Créer un fichier…** ouvre une fenêtre avec :
+
+- le **titre**, proposé à partir de ta première question ;
+- le **contenu**, pré-rempli avec ta sélection, ou tout le texte si t'as rien
+  sélectionné ;
+- **les images de la conversation** — celles que t'as jointes et celles que le
+  Studio a faites — chacune avec une case à cocher ;
+- la **sorte de fichier**.
+
+| Sorte | Ce que ça donne |
+| --- | --- |
+| **PDF** | un vrai PDF A4, texte et images, à imprimer ou à remettre |
+| **Page web** | un seul fichier `.html`, images incluses, s'ouvre partout |
+| **Texte brut** | un `.txt` ; les images sont nommées `[Image 1]`, pas incluses |
+
+**Fichier ▸ Mes fichiers** liste tout ce que t'as créé, du plus récent au plus
+vieux, avec un bouton pour l'ouvrir ou ouvrir le dossier. Par défaut, ça va
+dans `~/.local/share/ecriture/fichiers/`.
+
+### Le PDF est écrit à la main
+
+Pas de librairie à installer : le PDF est construit directement, avec la
+police Helvetica intégrée au format (aucune police à embarquer). Les lignes
+sont coupées avec les vraies largeurs de lettres, les accents passent en
+WinAnsi, les pages se suivent toutes seules, et les images sont mises telles
+quelles en JPEG (`DCTDecode`), ce que le PDF sait lire nativement. Une image
+trop haute est réduite pour rentrer dans la page.
+
+Sans Pillow, le texte marche pareil ; ce sont seulement les images qui
+manquent.
 
 ## Les pouvoirs magiques (✨ Magie)
 
@@ -569,6 +605,11 @@ Marceau connaît son propre numéro de version (`VERSION`, en haut du script).
 Les deux versions se mettent à jour toutes seules, chacune à sa manière.
 
 ### La version de bureau
+
+La mise à jour est **allumée par défaut** : quand une nouvelle version existe,
+elle s'installe toute seule, sans rien demander. L'application revérifie au
+démarrage **et aux `HEURES_MAJ` heures** (6 par défaut), pour que ça marche
+même si tu la laisses ouverte des jours.
 
 Au démarrage, en arrière-plan, l'application va lire le `ecriture.py` publié sur
 GitHub et compare les deux numéros. S'il y a du neuf :
