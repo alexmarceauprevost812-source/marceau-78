@@ -247,20 +247,30 @@ async function envoyer() {
   };
 
   try {
-    const entetes = { "content-type": "application/json" };
-    const code = codeAcces();
-    if (code) entetes["x-code-acces"] = code;
-    const reponse = await fetch("/api/chat", {
-      method: "POST", headers: entetes,
-      body: JSON.stringify({ messages: messages.map((m) => ({ role: m.role, content: m.content })) }),
+    const corpsEnvoye = JSON.stringify({
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
     });
+    const appeler = () => {
+      const entetes = { "content-type": "application/json" };
+      const code = codeAcces();
+      if (code) entetes["x-code-acces"] = code;
+      return fetch("/api/chat", { method: "POST", headers: entetes, body: corpsEnvoye });
+    };
+
+    let reponse = await appeler();
+    if (!reponse.ok && reponse.status === 401) {
+      const data = await reponse.clone().json().catch(() => ({}));
+      if (data.besoinCode) {
+        const saisi = prompt("Ce site demande un code d'accès :");
+        if (saisi && saisi.trim()) {
+          try { localStorage.setItem("ecriture.code", saisi.trim()); } catch { /* mode privé */ }
+          reponse = await appeler();   // on relance tout de suite, pas besoin de retaper
+        }
+      }
+    }
 
     if (!reponse.ok) {
       const data = await reponse.json().catch(() => ({}));
-      if (data.besoinCode) {
-        const saisi = prompt("Ce site demande un code d'accès :");
-        if (saisi) { try { localStorage.setItem("ecriture.code", saisi.trim()); } catch {} }
-      }
       fini(false);
       doc.append(creer("p", "reponse", data.erreur || `Le serveur a répondu ${reponse.status}.`));
       doc.scrollTop = doc.scrollHeight;

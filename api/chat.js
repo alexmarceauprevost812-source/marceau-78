@@ -1,6 +1,7 @@
 // Fonction serverless : c'est elle qui parle à Claude.
 // La clé API reste ici, côté serveur — elle ne part jamais dans le navigateur.
 import Anthropic from "@anthropic-ai/sdk";
+import { timingSafeEqual } from "node:crypto";
 
 export const config = { maxDuration: 60 };
 
@@ -60,6 +61,14 @@ function messageErreur(err) {
   return "Erreur : " + (err?.message || err);
 }
 
+/** Compare deux codes sans laisser le temps de réponse trahir les bons caractères. */
+function memeCode(recu, attendu) {
+  const a = Buffer.from(String(recu ?? ""), "utf8");
+  const b = Buffer.from(String(attendu), "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ erreur: "Utilise POST." });
@@ -74,7 +83,7 @@ export default async function handler(req, res) {
   }
   // Protection optionnelle : si CODE_ACCES est défini, il faut le fournir.
   const attendu = process.env.CODE_ACCES;
-  if (attendu && req.headers["x-code-acces"] !== attendu) {
+  if (attendu && !memeCode(req.headers["x-code-acces"], attendu)) {
     res.status(401).json({ erreur: "Code d'accès manquant ou invalide.", besoinCode: true });
     return;
   }
