@@ -207,45 +207,41 @@ la liste est relue à chaque ouverture.
 
 ## Le Codex
 
-Depuis le menu de gauche, **Codex </>** ouvre un éditeur de code relié à
-GitHub : l'arborescence du projet à gauche, l'éditeur au centre, un assistant à
-droite.
+Depuis le menu de gauche, **Codex** ouvre **un seul écran, centré** : tu écris
+en bas, les réponses arrivent au milieu. Pas de panneau à gauche, pas de
+panneau à droite — comme Claude Code sur un téléphone.
 
 Il faut un token GitHub *fine-grained* avec la permission **Contents : Read and
-write** (bouton **Token**, ou variable `GITHUB_TOKEN`). Ensuite **Projet ▾**
-liste tes dépôts.
+write** (Paramètres, ou la variable `GITHUB_TOKEN`). Ensuite **Projet ▾** liste
+tes dépôts.
 
-- le code est coloré pour Python, JavaScript, HTML, CSS, JSON, shell, SQL et
-  Markdown — seulement la partie visible à l'écran, pour rester rapide même sur
-  un gros fichier ;
-- **l'assistant trouve les fichiers tout seul** : t'as rien à ouvrir. Sur un petit
-  projet il lit tout; sur un gros, il demande d'abord à l'IA lesquels lire (bloc
-  `[LIRE]`), pis il peut en redemander d'autres avant d'écrire — deux tours au
-  maximum, pour pas tourner en rond ;
-- **Scanner** lit tout le projet d'un coup, si tu veux forcer ;
-- **le code écrit par l'IA s'affiche en panneaux dépliables** dans l'assistant :
-  le nom du fichier, son nombre de lignes, s'il est neuf ou modifié. Un clic
-  ouvre le code au complet, coloré, en lecture seule; le bouton **Éditeur**
-  l'ouvre dans un onglet modifiable ;
-- **la boîte où tu écris est en bas au centre**, comme dans le chat ;
-- l'assistant écrit des fichiers complets dans des blocs `[FICHIER …]`, qui
-  s'ouvrent en onglets **sans rien envoyer** sur GitHub ;
-- **Enregistrer** (ou `Ctrl` + `S`) envoie les onglets modifiés sur GitHub.
+Tu dis ce que tu veux changer. **T'as rien à ouvrir** : l'assistant trouve les
+fichiers tout seul. Sur un petit projet il lit tout; sur un gros, il demande
+d'abord à l'IA lesquels lire (bloc `[LIRE]`), pis il peut en redemander
+d'autres avant d'écrire — deux tours au maximum, pour pas tourner en rond.
 
-Sans projet ouvert, **Enregistrer** écrit les fichiers sur ton ordinateur.
+### Les cartes de fichiers
 
-### Pousser tout seul
+Chaque fichier touché arrive dans la conversation en **carte fermée** :
 
-Par défaut, l'assistant écrit dans des onglets marqués `●` et c'est toi qui
-cliques **Enregistrer**. La case **Pousser tout seul**, dans la barre du Codex,
-lui donne le droit d'envoyer sur GitHub sans rien demander — le choix est gardé
-d'une fois à l'autre.
+```
+▸ src/app.py    +2 −1                          [Modifier]
+▸ src/neuf.py   nouveau fichier  +1            [Modifier]
+```
 
-Dans la version web, cette case ajoute carrément un sixième outil à l'agent,
-`pousser_sur_github`. Décochée, l'outil n'est **pas offert** à l'IA, et il est
-refusé une deuxième fois au moment de l'exécuter : un modèle qui essaierait de
-l'appeler pareil se fait dire non. Sans cette deuxième vérification, la case ne
-protégeait rien — c'est un test qui l'a montré.
+Un clic l'ouvre et montre **ce qui a changé**, pas juste le fichier :
+
+- les lignes **ajoutées** en vert, avec un `+` et leur numéro ;
+- les lignes **enlevées** en rouge, avec un `−` ;
+- le reste en gris, pour le contexte ;
+- les longs bouts pareils repliés en `⋯ 14 lignes pareilles`, pour pas noyer
+  les changements.
+
+Un fichier neuf s'affiche tout en vert. Le bouton **Modifier** ouvre l'éditeur
+par-dessus l'écran, avec la coloration et les onglets; **‹ Retour** te ramène.
+
+**Fichiers** ouvre la liste du projet dans une fenêtre, si tu veux aller voir
+un fichier toi-même. **Enregistrer (N)** dit combien attendent d'être envoyés.
 
 ### Le Codex web
 
