@@ -19,6 +19,22 @@ const listeSessions = $("#sessions");
 const choixMoteur = $("#moteur");
 
 const URL_OLLAMA = "http://localhost:11434";
+// Les modèles Claude offerts. Prix par million de mots-jetons (entrée / sortie).
+const MODELES_CLAUDE = [
+  { id: "claude-opus-5",    nom: "Opus 5",    note: "le plus capable",                prix: "5 $ / 25 $" },
+  { id: "claude-sonnet-5",  nom: "Sonnet 5",  note: "bon partout, moins cher",        prix: "2 $ / 10 $" },
+  { id: "claude-haiku-4-5", nom: "Haiku 4.5", note: "le plus rapide et le moins cher", prix: "1 $ / 5 $" },
+  { id: "claude-fable-5-1", nom: "Fable 5.1", note: "pour les tâches longues",        prix: "10 $ / 50 $" },
+];
+// Les IA gratuites qu'on propose d'installer, de la plus légère à la plus lourde.
+const OLLAMA_SUGGERES = [
+  ["llama3.2",    "2 Go",   "Léger et rapide. Le meilleur premier choix."],
+  ["gemma3",      "3,3 Go", "Compact, répond vite, correct en français."],
+  ["mistral",     "4,1 Go", "Équilibré. Bon en français, bon partout."],
+  ["qwen3",       "5,2 Go", "Le plus fort pour le code et le raisonnement."],
+  ["deepseek-r1", "5,2 Go", "Réfléchit avant de répondre. Plus lent, plus posé."],
+];
+let modelesEnLigne = [];   // rempli par l'API quand une clé est branchée
 const URL_CLAUDE = "https://api.anthropic.com/v1/messages";
 const MODELE_CLAUDE = "claude-sonnet-5";
 const MAX_TOKENS = 8000;
@@ -87,14 +103,46 @@ async function modelesOllama() {
   }
 }
 
+/** Demande à l'API la liste des modèles que CETTE clé peut utiliser. */
+async function chargerModelesClaude() {
+  const cle = lire(CLE_CLAUDE);
+  if (!cle) return;
+  try {
+    const rep = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+      headers: {
+        "x-api-key": cle,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+    });
+    if (!rep.ok) return;                      // clé refusée : on garde la liste d'en haut
+    const data = await rep.json();
+    const connus = Object.fromEntries(MODELES_CLAUDE.map((m) => [m.id, m]));
+    modelesEnLigne = (data.data || []).map((m) => ({
+      id: m.id,
+      nom: (m.display_name || m.id).replace(/^Claude /, ""),
+      note: connus[m.id]?.note || "",
+      prix: connus[m.id]?.prix || "",
+    }));
+  } catch { /* hors ligne : tant pis */ }
+}
+
+function modelesClaude() {
+  return modelesEnLigne.length ? modelesEnLigne : MODELES_CLAUDE;
+}
+
 async function construireMoteurs() {
   const installes = await modelesOllama();
   moteurs = installes.map((nom) => ({
     id: "ollama:" + nom, nom: nom.replace(/:latest$/, "") + " (gratuit, sur ton ordi)",
     type: "ollama", modele: nom,
   }));
-  moteurs.push({ id: "claude:perso", nom: "Claude + web (ta clé)", type: "claude-perso" });
-  moteurs.push({ id: "claude:site", nom: "Claude + web (clé du site)", type: "claude-site" });
+  for (const m of modelesClaude()) {
+    moteurs.push({
+      id: "claude:" + m.id, type: "claude", modele: m.id,
+      nom: `Claude ${m.nom} + web${m.note ? " — " + m.note : ""}`,
+    });
+  }
 
   const garde = lire(CLE_MOTEUR);
   choixMoteur.replaceChildren();
@@ -104,7 +152,7 @@ async function construireMoteurs() {
     choixMoteur.append(option);
   }
   choixMoteur.value = moteurs.some((m) => m.id === garde) ? garde
-    : (installes.length ? moteurs[0].id : "claude:perso");
+    : (installes.length ? moteurs[0].id : "claude:claude-sonnet-5");
   majAstuceMoteur();
   return installes;
 }
@@ -117,12 +165,13 @@ function majAstuceMoteur() {
   const m = moteurActuel();
   const astuce = $("#astuce-moteur");
   if (!m) return;
-  if (m.type === "ollama") astuce.textContent = "Gratuit. Rien ne sort de ton ordinateur.";
-  else if (m.type === "claude-perso") {
-    astuce.textContent = lire(CLE_CLAUDE)
-      ? "Ta clé reste sur cet appareil : le navigateur appelle Claude directement."
-      : "Il faut ta clé Claude — ouvre Paramètres.";
-  } else astuce.textContent = "Utilise la clé du propriétaire du site. Un code peut être demandé.";
+  if (m.type === "ollama") {
+    astuce.textContent = "Gratuit. Rien ne sort de ton ordinateur.";
+  } else if (lire(CLE_CLAUDE)) {
+    astuce.textContent = "Ta clé, gardée ici : le navigateur appelle Claude directement.";
+  } else {
+    astuce.textContent = "Sans ta clé, c'est celle du site qui paie (un code peut être demandé).";
+  }
 }
 
 /* ---------- Les trois transports ----------
@@ -182,7 +231,7 @@ async function* fluxOllama(messages, modele) {
 }
 
 /** Claude appelé directement par le navigateur, avec la clé de la personne. */
-async function* fluxClaudeDirect(messages, cle) {
+async function* fluxClaudeDirect(messages, cle, modele) {
   let conversation = messages;
   const morceaux = [];
   const sources = [];
@@ -198,7 +247,7 @@ async function* fluxClaudeDirect(messages, cle) {
           "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify({
-          model: MODELE_CLAUDE, max_tokens: MAX_TOKENS,
+          model: modele || MODELE_CLAUDE, max_tokens: MAX_TOKENS,
           system: instructionsSysteme(true), messages: conversation,
           tools: [{ type: "web_search_20260209", name: "web_search", max_uses: RECHERCHES_MAX }],
         }),
@@ -240,8 +289,8 @@ async function* fluxClaudeDirect(messages, cle) {
 }
 
 /** La clé du propriétaire, côté serveur. Un code d'accès peut être demandé. */
-async function* fluxServeur(messages) {
-  const envoi = JSON.stringify({ messages });
+async function* fluxServeur(messages, modele) {
+  const envoi = JSON.stringify({ messages, modele });
   const appeler = () => {
     const entetes = { "content-type": "application/json" };
     const code = lire(CLE_CODE);
@@ -289,8 +338,10 @@ async function* fluxServeur(messages) {
 
 function flux(moteur, messages) {
   if (moteur.type === "ollama") return fluxOllama(messages, moteur.modele);
-  if (moteur.type === "claude-perso") return fluxClaudeDirect(messages, lire(CLE_CLAUDE));
-  return fluxServeur(messages);
+  const cle = lire(CLE_CLAUDE);
+  // Ta clé si tu en as une — elle ne touche alors jamais le serveur du site.
+  return cle ? fluxClaudeDirect(messages, cle, moteur.modele)
+             : fluxServeur(messages, moteur.modele);
 }
 
 /* ---------- Le plan et son schéma ---------- */
@@ -491,11 +542,6 @@ async function envoyer() {
   if (!question) return;
   const moteur = moteurActuel();
   if (!moteur) return;
-  if (moteur.type === "claude-perso" && !lire(CLE_CLAUDE)) {
-    ouvrirMenu(); $("#cle-claude").focus();
-    $("#mot-cle").textContent = "Colle ta clé Claude ici, pis renvoie ta question.";
-    return;
-  }
 
   const mien = ++generation;
   saisie.value = "";

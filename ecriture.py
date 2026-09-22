@@ -107,6 +107,14 @@ DOSSIER_CONFIG = Path.home() / ".config" / "ecriture"
 FICHIER_CLE = DOSSIER_CONFIG / "cle_api"
 FICHIER_TOKEN = DOSSIER_CONFIG / "github_token"
 DOSSIER_SESSIONS = Path.home() / ".local" / "share" / "ecriture" / "sessions"
+FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'auto
+
+# ---------- Mises à jour ----------
+# L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
+# téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
+VERSION = "1.1.0"
+URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
+           "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
 NOM_CLAUDE = "Claude + web (payant)"   # nom affiché dans le menu
 STYLE_QUEBECOIS = True                 # False = l'IA parle en français standard
@@ -736,6 +744,63 @@ class SchemaAnime(tk.Canvas):
 
 
 # ---------- Petits morceaux d'interface ----------
+def numeros(version):
+    """« 1.10.2 » devient (1, 10, 2), pour comparer deux versions comme du monde."""
+    return tuple(int(n) for n in re.findall(r"\d+", version)) or (0,)
+
+
+def version_du_texte(texte):
+    """Lit le numéro de version écrit dans un ecriture.py."""
+    trouve = re.search(r'^VERSION\s*=\s*"([^"]+)"', texte, re.M)
+    return trouve.group(1) if trouve else ""
+
+
+def chercher_maj(timeout=20):
+    """Va voir sur GitHub s'il y a du neuf.
+
+    Retourne (version, code_source) si une version plus récente existe,
+    (None, "") si t'es déjà à jour, et lève une erreur si ça n'a pas marché.
+    """
+    requete = urllib.request.Request(URL_MAJ, headers={"User-Agent": f"Ecriture/{VERSION}"})
+    with urllib.request.urlopen(requete, timeout=timeout) as reponse:
+        texte = reponse.read().decode("utf-8")
+    version = version_du_texte(texte)
+    if not version:
+        raise ValueError("Le fichier téléchargé n'a pas de numéro de version.")
+    if numeros(version) <= numeros(VERSION):
+        return None, ""
+    return version, texte
+
+
+def installer_maj(texte):
+    """Remplace le script par la version téléchargée. Retourne le chemin de la sauvegarde.
+
+    On vérifie que le code compile avant de toucher à quoi que ce soit, pis on garde
+    l'ancienne version à côté : si jamais la nouvelle bogue, t'as juste à la renommer.
+    """
+    compile(texte, "ecriture.py", "exec")          # un fichier brisé ne passe pas
+    moi = Path(__file__).resolve()
+    neuf = moi.with_name(moi.name + ".neuf")
+    neuf.write_text(texte, encoding="utf-8")
+    sauvegarde = moi.with_name(moi.stem + "_precedent.py")
+    sauvegarde.write_text(moi.read_text(encoding="utf-8"), encoding="utf-8")
+    os.replace(neuf, moi)                          # remplacement d'un coup, sans trou
+    moi.chmod(0o755)
+    return sauvegarde
+
+
+def maj_auto_active():
+    """Par défaut oui : l'app se tient à jour toute seule."""
+    if FICHIER_MAJ.exists():
+        return FICHIER_MAJ.read_text(encoding="utf-8").strip() != "non"
+    return True
+
+
+def regler_maj_auto(active):
+    DOSSIER_CONFIG.mkdir(parents=True, exist_ok=True)
+    FICHIER_MAJ.write_text("oui" if active else "non", encoding="utf-8")
+
+
 def bouton_orange(parent, texte, commande, taille=11):
     return tk.Button(
         parent, text=texte, command=commande,
@@ -1738,6 +1803,7 @@ class AppEcriture(tk.Tk):
         self.saisie.focus_set()
         self.after(80, self.traiter_taches)
         self.after(300, self.charger_modeles_claude)
+        self.after(1500, self.verifier_maj)   # sans déranger : ça se fait en arrière-plan
 
     # ---------- Outils ----------
     def configurer_tags(self, widget, taille=14, retrait=0):
@@ -1917,29 +1983,63 @@ class AppEcriture(tk.Tk):
             relief="flat", bd=0, highlightthickness=0, cursor="hand2")
         self.bouton_menu.place(x=15, y=14, width=46, height=38)
 
-    def bouton_nav(self, parent, texte, commande):
-        return tk.Button(parent, text=texte, command=commande, anchor="w", bg=GRIS_INACTIF, fg=NOIR,
+    def bouton_nav(self, parent, icone, texte, commande):
+        """Un des trois grands boutons du menu : pictogramme à gauche, nom à côté."""
+        return tk.Button(parent, text=f"  {icone}   {texte}", command=commande, anchor="w",
+                         bg=GRIS_INACTIF, fg=NOIR,
                          activebackground=ORANGE_FONCE, activeforeground=NOIR,
-                         font=(FAMILLE, 12, "bold"), relief="flat", bd=0, highlightthickness=0,
-                         padx=16, pady=9, cursor="hand2")
+                         font=(FAMILLE, 13, "bold"), relief="flat", bd=0, highlightthickness=0,
+                         padx=12, pady=12, cursor="hand2")
+
+    def cadre_defilant(self, parent):
+        """Un cadre qui défile : Paramètres tient même sur un écran de portable."""
+        toile = tk.Canvas(parent, bg=GRIS_MENU, highlightthickness=0, bd=0)
+        toile.pack(fill="both", expand=True)
+        dedans = tk.Frame(toile, bg=GRIS_MENU)
+        fenetre = toile.create_window((0, 0), window=dedans, anchor="nw")
+
+        def redimensionner(_=None):
+            toile.configure(scrollregion=toile.bbox("all"))
+            toile.itemconfigure(fenetre, width=toile.winfo_width())
+
+        dedans.bind("<Configure>", redimensionner)
+        toile.bind("<Configure>", redimensionner)
+        # La molette ne marche que quand la souris est au-dessus : ailleurs, elle
+        # continue de faire défiler le texte comme d'habitude.
+        def rouler(e):
+            toile.yview_scroll(-1 if e.num == 4 or e.delta > 0 else 1, "units")
+
+        def suivre(_):
+            for touche in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
+                toile.bind_all(touche, rouler)
+
+        def lacher(_):
+            for touche in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
+                toile.unbind_all(touche)
+
+        toile.bind("<Enter>", suivre)
+        toile.bind("<Leave>", lacher)
+        return dedans
 
     def separateur(self, parent, **pack):
         tk.Frame(parent, bg="#5e5e5e", height=2).pack(fill="x", padx=14, **pack)
 
     def construire_page_principale(self, p):
         tk.Frame(p, bg=GRIS_MENU, height=70).pack(fill="x")   # la place du bouton ☰
-        self.nav_chat = self.bouton_nav(p, "Chat", self.aller_chat)
-        self.nav_chat.pack(fill="x", padx=14, pady=(0, 6))
-        self.nav_codex = self.bouton_nav(p, "Codex  </>", self.ouvrir_codex)
-        self.nav_codex.pack(fill="x", padx=14)
-        self.separateur(p, pady=14)
-        bouton_orange(p, "+ Nouvelle conversation", self.nouveau).pack(fill="x", padx=14, pady=(0, 12))
+        # Les trois modes, de la même grosseur, en haut : on les voit d'un coup d'œil.
+        self.nav_chat = self.bouton_nav(p, "\u270e", "Chat", self.aller_chat)
+        self.nav_chat.pack(fill="x", padx=14, pady=(0, 8))
+        self.nav_codex = self.bouton_nav(p, "\u25a4", "Codex", self.ouvrir_codex)
+        self.nav_codex.pack(fill="x", padx=14, pady=(0, 8))
+        self.nav_param = self.bouton_nav(p, "\u2699", "Paramètres",
+                                         lambda: self.aller_page("parametres"))
+        self.nav_param.pack(fill="x", padx=14)
+        self.separateur(p, pady=18)
+        # En dessous : juste tes conversations. Tout le réglage est dans Paramètres.
+        bouton_orange(p, "+ Nouvelle conversation", self.nouveau).pack(
+            fill="x", padx=14, pady=(0, 12))
         tk.Label(p, text="Conversations", bg=GRIS_MENU, fg=NOIR, anchor="w",
                  font=(FAMILLE, 10, "bold")).pack(fill="x", padx=16)
-        # Paramètres reste collé tout en bas
-        bouton_orange(p, "Paramètres", lambda: self.aller_page("parametres")).pack(
-            side="bottom", fill="x", padx=14, pady=14)
-        self.separateur(p, side="bottom")
         self.liste_sessions = tk.Listbox(
             p, bg=GRIS_MENU, fg=NOIR, selectbackground=ORANGE, selectforeground=NOIR,
             font=(FAMILLE, 11), relief="flat", bd=0, highlightthickness=0, activestyle="none")
@@ -1948,14 +2048,20 @@ class AppEcriture(tk.Tk):
         self.liste_sessions.bind("<Button-3>", self.menu_session)
         self.maj_navigation()
 
-    def construire_page_parametres(self, p):
-        tk.Frame(p, bg=GRIS_MENU, height=70).pack(fill="x")
-        haut = tk.Frame(p, bg=GRIS_MENU)
+    def construire_page_parametres(self, page):
+        tk.Frame(page, bg=GRIS_MENU, height=70).pack(fill="x")
+        haut = tk.Frame(page, bg=GRIS_MENU)
         haut.pack(fill="x", padx=14, pady=(0, 6))
         bouton_orange(haut, "‹ Retour", lambda: self.aller_page("principale"), taille=9).pack(side="left")
-        tk.Label(haut, text="Paramètres", bg=GRIS_MENU, fg=NOIR,
-                 font=(FAMILLE, 13, "bold")).pack(side="left", padx=12)
-        self.separateur(p, pady=(8, 4))
+        tk.Label(haut, text="\u2699  Paramètres", bg=GRIS_MENU, fg=NOIR,
+                 font=(FAMILLE, 13, "bold")).pack(side="left", padx=10)
+        tk.Frame(page, bg="#5e5e5e", height=2).pack(fill="x", padx=14, pady=(8, 0))
+        p = self.cadre_defilant(page)   # tout ce qui suit défile
+
+        tk.Label(p, text="Tout ce qui se règle est ici. Le menu, lui, reste simple.",
+                 bg=GRIS_MENU, fg="#2e2e2e", anchor="w", justify="left",
+                 font=(FAMILLE, 9), wraplength=LARGEUR_MENU - 36).pack(fill="x", padx=16, pady=(8, 0))
+
         reglages = [
             ("claude", "Clé API Claude", FICHIER_CLE, "ANTHROPIC_API_KEY",
              "Pour « Claude + web ». Crée ta clé sur console.anthropic.com."),
@@ -1965,7 +2071,7 @@ class AppEcriture(tk.Tk):
         ]
         for quoi, titre, fichier, variable, aide in reglages:
             tk.Label(p, text=titre, bg=GRIS_MENU, fg=NOIR, anchor="w",
-                     font=(FAMILLE, 11, "bold")).pack(fill="x", padx=16, pady=(12, 2))
+                     font=(FAMILLE, 11, "bold")).pack(fill="x", padx=16, pady=(14, 2))
             statut = tk.Label(p, bg=GRIS_MENU, fg=NOIR, anchor="w", justify="left",
                               font=(FAMILLE, 9), wraplength=LARGEUR_MENU - 36)
             statut.pack(fill="x", padx=16)
@@ -1984,10 +2090,92 @@ class AppEcriture(tk.Tk):
                      font=(FAMILLE, 9), wraplength=LARGEUR_MENU - 36).pack(fill="x", padx=16, pady=(6, 4))
             self.champs[quoi] = {"titre": titre, "fichier": fichier, "variable": variable,
                                  "statut": statut, "entree": entree}
-        self.separateur(p, pady=(10, 0))
+
+        tk.Frame(p, bg="#5e5e5e", height=2).pack(fill="x", padx=14, pady=(14, 0))
+        tk.Label(p, text="IA gratuites", bg=GRIS_MENU, fg=NOIR, anchor="w",
+                 font=(FAMILLE, 11, "bold")).pack(fill="x", padx=16, pady=(12, 2))
+        tk.Label(p, text="Elles tournent sur ton ordi, sans clé pis sans payer une cenne.",
+                 bg=GRIS_MENU, fg="#2e2e2e", anchor="w", justify="left",
+                 font=(FAMILLE, 9), wraplength=LARGEUR_MENU - 36).pack(fill="x", padx=16)
         bouton_orange(p, "Ajouter des IA gratuites…", self.ouvrir_ia_gratuites, taille=9).pack(
-            fill="x", padx=16, pady=(10, 0))
+            fill="x", padx=16, pady=(8, 4))
+
+        tk.Frame(p, bg="#5e5e5e", height=2).pack(fill="x", padx=14, pady=(14, 0))
+        tk.Label(p, text="Mises à jour", bg=GRIS_MENU, fg=NOIR, anchor="w",
+                 font=(FAMILLE, 11, "bold")).pack(fill="x", padx=16, pady=(12, 2))
+        self.statut_maj = tk.Label(p, text=f"Version {VERSION}", bg=GRIS_MENU, fg=NOIR,
+                                   anchor="w", justify="left", font=(FAMILLE, 9),
+                                   wraplength=LARGEUR_MENU - 36)
+        self.statut_maj.pack(fill="x", padx=16)
+        self.auto_maj = tk.BooleanVar(value=maj_auto_active())
+        tk.Checkbutton(p, text="Se mettre à jour toute seule", variable=self.auto_maj,
+                       command=lambda: regler_maj_auto(self.auto_maj.get()),
+                       bg=GRIS_MENU, fg=NOIR, activebackground=GRIS_MENU, activeforeground=NOIR,
+                       selectcolor=GRIS_ZONE, font=(FAMILLE, 9), anchor="w", relief="flat",
+                       highlightthickness=0, bd=0, cursor="hand2").pack(fill="x", padx=13, pady=(4, 0))
+        bouton_orange(p, "\u27f3  Vérifier maintenant",
+                      lambda: self.verifier_maj(annoncer=True), taille=9).pack(
+            fill="x", padx=16, pady=(6, 16))
         self.maj_statuts()
+
+    # ---------- Mises à jour ----------
+    def verifier_maj(self, annoncer=False):
+        """Regarde s'il y a du neuf sur GitHub. Si l'auto est allumée, ça s'installe tout seul.
+
+        annoncer=True : c'est toi qui as cliqué, donc on te répond même s'il n'y a rien.
+        """
+        if annoncer:
+            self.dire_maj("Vérification…")
+
+        def travailler():
+            try:
+                version, code = chercher_maj()
+            except Exception as e:
+                if annoncer:
+                    self.taches.put(lambda: self.dire_maj(f"Vérification impossible : {e}"))
+                return
+            if not version:
+                if annoncer:
+                    self.taches.put(lambda: self.dire_maj(f"Version {VERSION} — t'es à jour."))
+                return
+            if not maj_auto_active():
+                self.taches.put(lambda v=version: self.dire_maj(
+                    f"Version {v} disponible. Allume l'auto ou clique Vérifier pour l'installer."))
+                if annoncer:
+                    self.taches.put(lambda v=version, c=code: self.proposer_maj(v, c))
+                return
+            try:
+                sauvegarde = installer_maj(code)
+            except Exception as e:
+                self.taches.put(lambda: self.dire_maj(f"Installation impossible : {e}"))
+                return
+            self.taches.put(lambda v=version, g=sauvegarde: self.maj_installee(v, g))
+
+        threading.Thread(target=travailler, daemon=True).start()
+
+    def dire_maj(self, texte):
+        if getattr(self, "statut_maj", None):
+            self.statut_maj.config(text=texte)
+
+    def proposer_maj(self, version, code):
+        if not messagebox.askyesno(
+                "Mise à jour", f"La version {version} est prête (t'as la {VERSION}).\n\n"
+                               "L'installer maintenant ?"):
+            return
+        try:
+            sauvegarde = installer_maj(code)
+        except Exception as e:
+            messagebox.showerror("Mise à jour", f"Ça n'a pas marché : {e}")
+            return
+        self.maj_installee(version, sauvegarde)
+
+    def maj_installee(self, version, sauvegarde):
+        self.dire_maj(f"Version {version} installée. Redémarre l'app pour l'avoir.")
+        messagebox.showinfo(
+            "Mise à jour installée",
+            f"La version {version} est installée.\n\n"
+            f"Ferme pis rouvre l'app pour t'en servir.\n"
+            f"L'ancienne est gardée ici au cas où :\n{sauvegarde}")
 
     def aller_page(self, nom):
         """Fait glisser le menu vers une page : « principale » ou « parametres »."""

@@ -5,7 +5,15 @@ import { timingSafeEqual } from "node:crypto";
 
 export const config = { maxDuration: 60 };
 
-const MODELE = "claude-sonnet-5";
+// Les modèles qu'on accepte. Le client choisit dans cette liste, jamais ailleurs :
+// sans ça, n'importe qui pourrait faire payer au site un modèle bien plus cher.
+const MODELES = new Set([
+  "claude-opus-5",
+  "claude-sonnet-5",
+  "claude-haiku-4-5",
+  "claude-fable-5-1",
+]);
+const MODELE_DEFAUT = "claude-sonnet-5";
 const MAX_TOKENS = 8000;
 const RECHERCHES_MAX = 4;      // recherches web par question
 const TOURS_MAX = 5;           // relances quand l'API met la réponse sur pause
@@ -88,6 +96,9 @@ export default async function handler(req, res) {
     return;
   }
 
+  const demande = String(req.body?.modele || "");
+  const modele = MODELES.has(demande) ? demande : MODELE_DEFAUT;
+
   const messages = nettoyerMessages(req.body?.messages);
   if (!messages.length) {
     res.status(400).json({ erreur: "Aucune question à envoyer." });
@@ -109,7 +120,7 @@ export default async function handler(req, res) {
   try {
     for (let tour = 0; tour < TOURS_MAX; tour++) {
       const flux = client.messages.stream({
-        model: MODELE,
+        model: modele,
         max_tokens: MAX_TOKENS,
         system: instructionsSysteme(),
         messages: conversation,
