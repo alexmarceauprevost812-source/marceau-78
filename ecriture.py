@@ -1639,6 +1639,186 @@ def nettoyer_sortie(texte):
     return texte.strip()
 
 
+# ----- 🪄 Corriger les fautes (LanguageTool : hors ligne, gratuit) -----
+MESSAGE_LANGUETOOL = manque(
+    "LanguageTool (le correcteur)",
+    "sudo apt install default-jre\npip install language_tool_python",
+    "LanguageTool a besoin de Java. Au premier lancement, il télécharge le correcteur\n"
+    "(environ 250 Mo) : après, il marche sans Internet.\n\n"
+    "Sur Ubuntu récent, pip refuse d'installer dans le Python du système. Fais plutôt :\n"
+    "    python3 -m venv ~/ecriture-venv\n"
+    "    ~/ecriture-venv/bin/pip install language_tool_python")
+
+_correcteur = None
+
+
+def correcteur_francais():
+    """Ouvre LanguageTool en français. On le garde ouvert : il est long à démarrer."""
+    global _correcteur
+    if _correcteur is None:
+        import language_tool_python
+        _correcteur = language_tool_python.LanguageTool("fr")
+    return _correcteur
+
+
+def fermer_correcteur():
+    global _correcteur
+    if _correcteur is not None:
+        try:
+            _correcteur.close()
+        except Exception:
+            pass
+        _correcteur = None
+
+
+def trouver_fautes(texte):
+    """Rend la liste des fautes : (début, fin, mauvais, proposé, explication)."""
+    fautes = []
+    for f in correcteur_francais().check(texte):
+        debut, fin = f.offset, f.offset + f.errorLength
+        propose = (f.replacements or [None])[0]
+        if not propose or propose == texte[debut:fin]:
+            continue          # rien à proposer : on n'en parle pas
+        fautes.append((debut, fin, texte[debut:fin], propose,
+                       (f.message or "").strip() or "Faute"))
+    # De la fin vers le début : corriger une faute ne bouge pas les positions des autres
+    fautes.sort(key=lambda f: f[0], reverse=True)
+    return fautes
+
+
+class FenetreFautes(tk.Toplevel):
+    """Les fautes une par une : tu acceptes ou tu refuses chacune."""
+
+    def __init__(self, app, fautes, appliquer):
+        super().__init__(app, bg=GRIS_MENU)
+        self.app, self.fautes, self.appliquer = app, fautes, appliquer
+        self.acceptees = []
+        self.i = 0
+        self.title("Corriger les fautes")
+        self.transient(app)
+        self.resizable(False, False)
+
+        cadre = tk.Frame(self, bg=GRIS_MENU)
+        cadre.pack(fill="both", expand=True, padx=20, pady=18)
+        self.compteur = tk.Label(cadre, bg=GRIS_MENU, fg="#2e2e2e", anchor="w", font=(FAMILLE, 10))
+        self.compteur.pack(fill="x")
+        self.explication = tk.Label(cadre, bg=GRIS_MENU, fg=NOIR, anchor="w", justify="left",
+                                    font=(FAMILLE, 11, "bold"), wraplength=510)
+        self.explication.pack(fill="x", pady=(6, 12))
+        self.phrase = tk.Label(cadre, bg=GRIS_ZONE, fg=NOIR, anchor="w", justify="left",
+                               font=(FAMILLE, 11), wraplength=496, padx=12, pady=10)
+        self.phrase.pack(fill="x")
+        boutons = tk.Frame(cadre, bg=GRIS_MENU)
+        boutons.pack(fill="x", pady=(18, 0))
+        bouton_orange(boutons, "✓  Accepter", self.accepter).pack(side="left")
+        bouton_orange(boutons, "✗  Refuser", self.refuser).pack(side="left", padx=(10, 0))
+        bouton_orange(boutons, "Tout accepter", self.tout_accepter, taille=9).pack(side="right")
+        self.bind("<Escape>", lambda e: self.terminer())
+        self.protocol("WM_DELETE_WINDOW", self.terminer)
+        self.montrer()
+        self.centrer(app)
+        self.grab_set()        # on répond à la fenêtre avant de retourner au texte
+
+    def centrer(self, app):
+        """La fenêtre prend juste la place qu'il faut, au milieu de l'app."""
+        self.update_idletasks()
+        largeur, hauteur = 560, self.winfo_reqheight()
+        x = app.winfo_rootx() + (app.winfo_width() - largeur) // 2
+        y = app.winfo_rooty() + (app.winfo_height() - hauteur) // 3
+        self.geometry(f"{largeur}x{hauteur}+{max(0, x)}+{max(0, y)}")
+
+    def montrer(self):
+        if self.i >= len(self.fautes):
+            self.terminer()
+            return
+        debut, fin, mauvais, propose, message = self.fautes[self.i]
+        self.compteur.config(text=f"Faute {self.i + 1} sur {len(self.fautes)}")
+        self.explication.config(text=message)
+        self.phrase.config(text=f"{mauvais}   →   {propose}")
+
+    def accepter(self):
+        self.acceptees.append(self.fautes[self.i])
+        self.i += 1
+        self.montrer()
+
+    def refuser(self):
+        self.i += 1
+        self.montrer()
+
+    def tout_accepter(self):
+        self.acceptees.extend(self.fautes[self.i:])
+        self.i = len(self.fautes)
+        self.terminer()
+
+    def terminer(self):
+        self.appliquer(self.acceptees)
+        self.destroy()
+
+
+# ----- 🌍 Traduire (Argos Translate : hors ligne, gratuit) -----
+MESSAGE_ARGOS = manque(
+    "Argos Translate (la traduction hors ligne)",
+    "pip install argostranslate",
+    "Sur Ubuntu récent, pip refuse d'installer dans le Python du système. Fais plutôt :\n"
+    "    python3 -m venv ~/ecriture-venv\n"
+    "    ~/ecriture-venv/bin/pip install argostranslate")
+
+LANGUES = {"fr": "français", "en": "anglais"}
+
+
+def argos_traduction():
+    """Charge Argos juste quand on en a besoin : l'app démarre vite pareil."""
+    import argostranslate.translate
+    return argostranslate.translate
+
+
+def argos_paquets():
+    import argostranslate.package
+    return argostranslate.package
+
+
+def argos_installe():
+    """Rend True si Argos Translate est sur l'ordi."""
+    try:
+        argos_traduction()
+        return True
+    except Exception:
+        return False
+
+
+def paires_installees():
+    """Les traductions déjà téléchargées, ex. {('fr', 'en'), ('en', 'fr')}."""
+    try:
+        paires = set()
+        for langue in argos_traduction().get_installed_languages():
+            for vers in getattr(langue, "translations_to", []) or []:
+                paires.add((langue.code, vers.to_lang.code))
+            # Selon la version d'Argos, la liste s'appelle autrement
+            for t in getattr(langue, "translations", []) or []:
+                cible = getattr(getattr(t, "to_lang", None), "code", None)
+                if cible:
+                    paires.add((langue.code, cible))
+        return paires
+    except Exception:
+        return set()
+
+
+def telecharger_langue(de, vers):
+    """Télécharge une paire de langues (une seule fois : après, ça marche sans Internet)."""
+    paquets = argos_paquets()
+    paquets.update_package_index()
+    for p in paquets.get_available_packages():
+        if p.from_code == de and p.to_code == vers:
+            paquets.install_from_path(p.download())
+            return True
+    raise RuntimeError(f"Argos n'offre pas la traduction {de} vers {vers}.")
+
+
+def traduire_texte(texte, de, vers):
+    resultat = argos_traduction().translate(texte, de, vers)
+    return (resultat or "").strip()
+
+
 # ---------- Moteur de schéma ----------
 MOTS_PLAN = re.compile(
     r"\b(plan|étapes?|etapes?|stratégie|marche à suivre|comment (faire|je|on|lancer|commencer))\b",
@@ -4213,7 +4393,13 @@ class AppEcriture(tk.Tk):
         menu.add_separator()
         menu.add_command(label="\U0001f3a4  Dicter", command=self.magie_dicter)
         menu.add_command(label="\U0001f50a  Lire à voix haute", command=self.magie_lire)
-        menu.add_command(label="\U0001f30d  Traduire (fr ↔ en)", command=self.magie_traduire)
+        traduire = tk.Menu(menu, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+                           activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
+        traduire.add_command(label="Français → English",
+                             command=lambda: self.magie_traduire("fr", "en"))
+        traduire.add_command(label="English → Français",
+                             command=lambda: self.magie_traduire("en", "fr"))
+        menu.add_cascade(label="\U0001f30d  Traduire", menu=traduire)
         return menu
 
     def ouvrir_menu_magie(self, event=None):
@@ -4384,22 +4570,96 @@ class AppEcriture(tk.Tk):
         self.pouvoir("Je résume ton texte",
                      lambda: texte_par_ollama(modele, bout, "resumer"), fini)
 
+    # --- 2. 🪄 Corriger les fautes ---
+    def magie_corriger(self):
+        texte, debut, fin = self.texte_choisi()
+        if not texte:
+            self.dire_magie("Écris ou sélectionne un texte à corriger.")
+            return
+        try:
+            correcteur_francais()
+        except ImportError:
+            messagebox.showinfo("Corriger", MESSAGE_LANGUETOOL, parent=self)
+            return
+        except Exception as e:
+            messagebox.showerror("Corriger", self.message_correcteur(e), parent=self)
+            return
+
+        def fini(fautes):
+            if not fautes:
+                self.dire_magie("Aucune faute trouvée. C'est bien écrit!")
+                return
+            FenetreFautes(self, fautes,
+                          lambda acceptees: self.appliquer_corrections(debut, fin, texte, acceptees))
+
+        self.pouvoir("Je cherche les fautes", lambda: trouver_fautes(texte), fini,
+                     besoin_ollama=False)
+
+    def appliquer_corrections(self, debut, fin, texte, acceptees):
+        """Applique les corrections acceptées. Un seul Ctrl+Z ramène tout comme c'était."""
+        if not acceptees:
+            self.dire_magie("Aucune correction appliquée.")
+            return
+        corrige = texte
+        # Les fautes sont déjà triées de la fin vers le début : les positions restent bonnes
+        for a, b, _, propose, _ in acceptees:
+            corrige = corrige[:a] + propose + corrige[b:]
+        mot = "correction" if len(acceptees) == 1 else "corrections"
+        self.remplacer_choix(debut, fin, corrige,
+                             f"{len(acceptees)} {mot} appliquée{'s' if len(acceptees) > 1 else ''}. "
+                             "Ctrl+Z ramène ton texte d'avant.")
+
+    def message_correcteur(self, err):
+        """Le message quand LanguageTool ne démarre pas — presque toujours Java qui manque."""
+        texte = str(err)
+        if "java" in texte.lower() or isinstance(err, FileNotFoundError):
+            return ("LanguageTool a besoin de Java, qui n'est pas installé.\n\n"
+                    "Dans un terminal :\n\n    sudo apt install default-jre\n\n"
+                    "Ensuite, ferme pis rouvre Écriture.")
+        return f"Le correcteur n'a pas démarré : {texte}"
+
+    # --- 7. 🌍 Traduire (hors ligne) ---
+    def magie_traduire(self, de, vers):
+        texte, debut, fin = self.texte_choisi()
+        if not texte:
+            self.dire_magie("Sélectionne le texte à traduire (ou écris quelque chose).")
+            return
+        if not argos_installe():
+            messagebox.showinfo("Traduire", MESSAGE_ARGOS, parent=self)
+            return
+        if (de, vers) not in paires_installees():
+            if not messagebox.askyesno(
+                    "Traduire",
+                    f"La traduction {LANGUES[de]} vers {LANGUES[vers]} n'est pas encore sur ton "
+                    "ordi.\n\nLa télécharger maintenant? Ça prend environ 100 Mo et une connexion "
+                    "Internet, une seule fois : après, la traduction marche hors ligne.",
+                    parent=self):
+                return
+            self.pouvoir(f"Je télécharge le {LANGUES[de]} vers {LANGUES[vers]}",
+                         lambda: telecharger_langue(de, vers),
+                         lambda _: self.magie_traduire(de, vers), besoin_ollama=False)
+            return
+
+        def fini(traduit):
+            if not traduit:
+                self.dire_magie("La traduction est revenue vide. Réessaie avec un texte plus court.")
+                return
+            self.remplacer_choix(debut, fin, traduit,
+                                 f"Traduit en {LANGUES[vers]}. Ctrl+Z ramène ton texte d'avant.")
+
+        self.pouvoir(f"Je traduis en {LANGUES[vers]}",
+                     lambda: traduire_texte(texte, de, vers), fini, besoin_ollama=False)
+
     # --- Pouvoirs pas encore branchés (ils arrivent un par un) ---
     def pas_encore(self, nom):
         messagebox.showinfo("Magie", f"« {nom} » n'est pas encore branché. Ça s'en vient!",
                             parent=self)
-
-    def magie_corriger(self):
-        self.pas_encore("Corriger les fautes")
 
     def magie_dicter(self):
         self.pas_encore("Dicter")
 
     def magie_lire(self):
         self.pas_encore("Lire à voix haute")
-
-    def magie_traduire(self):
-        self.pas_encore("Traduire")
 
     # --- 1. ✨ Continuer mon texte ---
     def magie_continuer(self):
