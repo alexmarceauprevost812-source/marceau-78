@@ -16,7 +16,9 @@ import os
 import queue
 import random
 import re
+import sys
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 import unicodedata
@@ -1637,6 +1639,209 @@ def nettoyer_sortie(texte):
     if len(texte) > 1 and texte[0] in "\"«“" and texte[-1] in "\"»”":
         texte = texte[1:-1]
     return texte.strip()
+
+
+# ----- 🎤 Dicter (faster-whisper) pis 🔊 Lire à voix haute (Piper) : les deux hors ligne -----
+DOSSIER_VOIX = Path.home() / ".local" / "share" / "ecriture" / "voix"
+MODELE_WHISPER = "small"          # tiny, base, small, medium, large-v3 — plus gros = meilleur, plus lent
+VOIX_PIPER = "fr_FR-siwis-medium"  # la voix française par défaut
+TAUX = 16000                      # 16 kHz mono : ce que Whisper attend
+
+MESSAGE_WHISPER = manque(
+    "faster-whisper (la dictée)",
+    "pip install faster-whisper sounddevice numpy\nsudo apt install libportaudio2",
+    "Au premier usage, il télécharge le modèle de reconnaissance (environ 500 Mo pour\n"
+    "« small ») : après, la dictée marche sans Internet.\n\n"
+    "Sur Ubuntu récent, pip refuse d'installer dans le Python du système. Fais plutôt :\n"
+    "    python3 -m venv ~/ecriture-venv\n"
+    "    ~/ecriture-venv/bin/pip install faster-whisper sounddevice numpy")
+
+MESSAGE_MICRO = (
+    "Aucun micro trouvé.\n\n"
+    "Vérifie que ton micro est branché, puis :\n\n"
+    "1. Installe la librairie audio :  sudo apt install libportaudio2\n"
+    "2. Regarde si le système le voit :  arecord -l\n"
+    "3. Choisis-le dans Paramètres → Son → Entrée\n\n"
+    "Ensuite, ferme pis rouvre Écriture.")
+
+MESSAGE_PIPER = manque(
+    "Piper (la lecture à voix haute)",
+    "pip install piper-tts",
+    "Il faut aussi télécharger une voix française, une seule fois :\n"
+    f"    python3 -m piper.download_voices {VOIX_PIPER} --download-dir ~/.local/share/ecriture/voix\n\n"
+    "Sur Ubuntu récent, pip refuse d'installer dans le Python du système. Fais plutôt :\n"
+    "    python3 -m venv ~/ecriture-venv\n"
+    "    ~/ecriture-venv/bin/pip install piper-tts")
+
+_whisper = None
+_voix_piper = None
+
+
+def micro_pret():
+    """Rend (True, "") si on peut enregistrer, sinon (False, le message à montrer)."""
+    try:
+        import sounddevice
+    except ImportError:
+        return False, MESSAGE_WHISPER
+    except OSError:
+        return False, MESSAGE_MICRO     # la librairie PortAudio manque au système
+    try:
+        if not any(a["max_input_channels"] > 0 for a in sounddevice.query_devices()):
+            return False, MESSAGE_MICRO
+    except Exception:
+        return False, MESSAGE_MICRO
+    return True, ""
+
+
+def enregistreur():
+    """Ouvre le micro en 16 kHz mono. Rend (le flux, la liste où les morceaux s'accumulent)."""
+    import sounddevice
+    morceaux = []
+    flux = sounddevice.InputStream(
+        samplerate=TAUX, channels=1, dtype="float32",
+        callback=lambda donnees, n, t, statut: morceaux.append(donnees.copy()))
+    flux.start()
+    return flux, morceaux
+
+
+def whisper_francais():
+    """Charge le modèle de reconnaissance. On le garde : il est long à ouvrir."""
+    global _whisper
+    if _whisper is None:
+        from faster_whisper import WhisperModel
+        _whisper = WhisperModel(MODELE_WHISPER, device="cpu", compute_type="int8")
+    return _whisper
+
+
+def transcrire(morceaux):
+    """Transforme ce qui a été enregistré en texte français."""
+    import numpy
+    if not morceaux:
+        return ""
+    son = numpy.concatenate(morceaux).flatten().astype("float32")
+    if len(son) < TAUX // 3:        # moins d'un tiers de seconde : y'a rien là
+        return ""
+    bouts, _ = whisper_francais().transcribe(son, language="fr", beam_size=5,
+                                             vad_filter=True)
+    return " ".join(b.text.strip() for b in bouts).strip()
+
+
+def fichier_voix():
+    """Le fichier .onnx de la voix française, s'il est téléchargé."""
+    for dossier in (DOSSIER_VOIX, Path.cwd()):
+        fichier = dossier / f"{VOIX_PIPER}.onnx"
+        if fichier.exists():
+            return fichier
+    return None
+
+
+def charger_voix():
+    """Charge la voix Piper. On la garde : elle est longue à ouvrir."""
+    global _voix_piper
+    if _voix_piper is None:
+        from piper import PiperVoice
+        chemin = fichier_voix()
+        if chemin is None:
+            raise FileNotFoundError("voix")
+        _voix_piper = PiperVoice.load(chemin)
+    return _voix_piper
+
+
+def telecharger_voix():
+    """Télécharge la voix française (une seule fois : après, ça marche sans Internet)."""
+    import subprocess
+    DOSSIER_VOIX.mkdir(parents=True, exist_ok=True)
+    subprocess.run([sys.executable, "-m", "piper.download_voices", VOIX_PIPER,
+                    "--download-dir", str(DOSSIER_VOIX)], check=True, capture_output=True)
+    if fichier_voix() is None:
+        raise RuntimeError("La voix ne s'est pas téléchargée.")
+    return True
+
+
+def fabriquer_son(texte):
+    """Écrit le texte lu dans un fichier .wav, pis rend son chemin."""
+    import wave
+    DOSSIER_VOIX.mkdir(parents=True, exist_ok=True)
+    chemin = DOSSIER_VOIX / f"lecture-{datetime.datetime.now():%Y%m%d-%H%M%S}.wav"
+    voix = charger_voix()
+    with wave.open(str(chemin), "wb") as f:
+        voix.synthesize_wav(texte, f)
+    return chemin
+
+
+def jouer_son(chemin):
+    """Joue le fichier. On essaie sounddevice, sinon les lecteurs du système."""
+    import wave
+    try:
+        import numpy, sounddevice
+        with wave.open(str(chemin), "rb") as f:
+            taux = f.getframerate()
+            son = numpy.frombuffer(f.readframes(f.getnframes()), dtype="int16")
+        sounddevice.play(son, taux)
+        sounddevice.wait()
+        return
+    except Exception:
+        pass        # pas de PortAudio : on passe aux lecteurs du système
+    import shutil
+    import subprocess
+    for outil in ("paplay", "aplay", "ffplay"):
+        if shutil.which(outil):
+            options = ["-nodisp", "-autoexit", "-loglevel", "quiet"] if outil == "ffplay" else []
+            subprocess.run([outil] + options + [str(chemin)], check=True, capture_output=True)
+            return
+    raise RuntimeError("Aucun lecteur de son trouvé. Installe-en un :  sudo apt install alsa-utils")
+
+
+def arreter_son():
+    """Coupe la lecture en cours, s'il y en a une."""
+    try:
+        import sounddevice
+        sounddevice.stop()
+    except Exception:
+        pass
+
+
+class FenetreDictee(tk.Toplevel):
+    """Pendant que ça enregistre : le temps qui passe, pis un bouton pour arrêter."""
+
+    def __init__(self, app, arreter):
+        super().__init__(app, bg=GRIS_MENU)
+        self.app, self.arreter, self.debut = app, arreter, time.time()
+        self.title("Dicter")
+        self.transient(app)
+        self.resizable(False, False)
+        cadre = tk.Frame(self, bg=GRIS_MENU)
+        cadre.pack(fill="both", expand=True, padx=24, pady=20)
+        tk.Label(cadre, text="\U0001f3a4  J'écoute…", bg=GRIS_MENU, fg=NOIR,
+                 font=(FAMILLE, 15, "bold")).pack()
+        self.temps = tk.Label(cadre, text="0:00", bg=GRIS_MENU, fg="#2e2e2e", font=(FAMILLE, 12))
+        self.temps.pack(pady=(6, 0))
+        tk.Label(cadre, text="Parle, pis clique Arrêter quand t'as fini.", bg=GRIS_MENU,
+                 fg="#2e2e2e", font=(FAMILLE, 10), wraplength=300).pack(pady=(4, 14))
+        bouton_orange(cadre, "⏹  Arrêter", self.fermer).pack()
+        self.protocol("WM_DELETE_WINDOW", self.fermer)
+        self.bind("<Escape>", lambda e: self.fermer())
+        self.minuterie = None
+        self.tictac()
+        self.update_idletasks()
+        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_reqwidth()) // 2
+        y = app.winfo_rooty() + (app.winfo_height() - self.winfo_reqheight()) // 3
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.grab_set()
+
+    def tictac(self):
+        secondes = int(time.time() - self.debut)
+        self.temps.config(text=f"{secondes // 60}:{secondes % 60:02d}")
+        self.minuterie = self.after(250, self.tictac)
+
+    def fermer(self):
+        if self.minuterie:
+            self.after_cancel(self.minuterie)
+            self.minuterie = None
+        action, self.arreter = self.arreter, None
+        self.destroy()
+        if action:
+            action()
 
 
 # ----- 🪄 Corriger les fautes (LanguageTool : hors ligne, gratuit) -----
@@ -3389,6 +3594,7 @@ class AppEcriture(tk.Tk):
         self.image_courante = None   # la dernière image de la conversation (pour le Studio)
         self.image_courante_chemin = None
         self.occupe_magie = False    # un pouvoir magique est en train de travailler
+        self.lecture_en_cours = False
         self.schemas = []
         self.question_en_cours = ""
         self.menu_ouvert = False
@@ -4392,7 +4598,8 @@ class AppEcriture(tk.Tk):
         menu.add_command(label="\U0001f4dc  Résumer", command=self.magie_resumer)
         menu.add_separator()
         menu.add_command(label="\U0001f3a4  Dicter", command=self.magie_dicter)
-        menu.add_command(label="\U0001f50a  Lire à voix haute", command=self.magie_lire)
+        menu.add_command(label="\u23f9  Arrêter la lecture" if self.lecture_en_cours else
+                               "\U0001f50a  Lire à voix haute", command=self.magie_lire)
         traduire = tk.Menu(menu, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
                            activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
         traduire.add_command(label="Français → English",
@@ -4471,6 +4678,8 @@ class AppEcriture(tk.Tk):
 
         def apres(resultat, err):
             self.occupe_magie = False
+            if err:
+                self.lecture_en_cours = False
             if generation != self.generation:
                 points.destroy()
                 return              # on a changé de conversation entre-temps
@@ -4650,16 +4859,83 @@ class AppEcriture(tk.Tk):
         self.pouvoir(f"Je traduis en {LANGUES[vers]}",
                      lambda: traduire_texte(texte, de, vers), fini, besoin_ollama=False)
 
-    # --- Pouvoirs pas encore branchés (ils arrivent un par un) ---
-    def pas_encore(self, nom):
-        messagebox.showinfo("Magie", f"« {nom} » n'est pas encore branché. Ça s'en vient!",
-                            parent=self)
-
+    # --- 5. 🎤 Dicter ---
     def magie_dicter(self):
-        self.pas_encore("Dicter")
+        pret, message = micro_pret()
+        if not pret:
+            messagebox.showinfo("Dicter", message, parent=self)
+            return
+        try:
+            flux, morceaux = enregistreur()
+        except Exception as e:
+            messagebox.showerror("Dicter", MESSAGE_MICRO + f"\n\n(Détail : {e})", parent=self)
+            return
+        position = self.document.index("insert")   # on écrira là où ton curseur était
 
+        def arrete():
+            try:
+                flux.stop()
+                flux.close()
+            except Exception:
+                pass
+
+            def fini(texte):
+                if not texte:
+                    self.dire_magie("J'ai rien entendu. Réessaie en parlant plus proche du micro.")
+                    return
+                # Un espace avant seulement s'il en manque un, pareil pour après :
+                # sinon la dictée se colle au mot d'avant, ou fait un double espace.
+                avant = self.document.get(f"{position}-1c", position)
+                apres = self.document.get(position, f"{position}+1c")
+                morceau = (("" if avant in ("", "\n", " ", "\t") else " ") + texte
+                           + ("" if apres in ("", "\n", " ", "\t") else " "))
+                self.edition(lambda: self.document.insert(position, morceau))
+                self.document.mark_set("insert", f"{position}+{len(morceau)}c")
+                self.document.see("insert")
+
+            self.pouvoir("Je transcris ce que t'as dit", lambda: transcrire(morceaux), fini,
+                         besoin_ollama=False)
+
+        FenetreDictee(self, arrete)
+
+    # --- 6. 🔊 Lire à voix haute ---
     def magie_lire(self):
-        self.pas_encore("Lire à voix haute")
+        texte, _, _ = self.texte_choisi()
+        if not texte:
+            self.dire_magie("Écris ou sélectionne un texte à lire.")
+            return
+        if self.lecture_en_cours:
+            arreter_son()
+            self.lecture_en_cours = False
+            self.dire_magie("Lecture arrêtée.")
+            return
+        try:
+            import piper                                     # noqa: F401
+        except ImportError:
+            messagebox.showinfo("Lire", MESSAGE_PIPER, parent=self)
+            return
+        if fichier_voix() is None:
+            if not messagebox.askyesno(
+                    "Lire à voix haute",
+                    f"La voix française ({VOIX_PIPER}) n'est pas encore sur ton ordi.\n\n"
+                    "La télécharger maintenant? Ça prend environ 60 Mo et une connexion "
+                    "Internet, une seule fois : après, la lecture marche hors ligne.",
+                    parent=self):
+                return
+            self.pouvoir("Je télécharge la voix française", telecharger_voix,
+                         lambda _: self.magie_lire(), besoin_ollama=False)
+            return
+        bout = texte[:5000]     # on lit un bon bout, pas un livre au complet
+        self.lecture_en_cours = True
+
+        def travail():
+            jouer_son(fabriquer_son(bout))
+            return True
+
+        def fini(_):
+            self.lecture_en_cours = False
+
+        self.pouvoir("Je lis ton texte à voix haute", travail, fini, besoin_ollama=False)
 
     # --- 1. ✨ Continuer mon texte ---
     def magie_continuer(self):
