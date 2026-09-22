@@ -1,25 +1,30 @@
 # marceau-78
 
 **Écriture** — un espace d'écriture minimaliste en Python/Tkinter, doublé d'un
-assistant qui répond aux questions et cherche sur le web.
+assistant qui répond aux questions.
 
-La zone de saisie démarre au centre de la fenêtre. Dès la première question
-envoyée, elle glisse vers le bas et la conversation apparaît au-dessus, dans un
-document que l'on peut relire, modifier et sauvegarder.
+Deux moteurs au choix, dans un menu sous la boîte de saisie :
 
-Thème gris mat, texte noir, boutons orange.
+- **les modèles locaux d'Ollama** — gratuits, hors ligne, sur ta machine
+- **Claude + recherche web** — payant, mais il va chercher l'info à jour
+
+La zone de saisie démarre au centre, sous le logo. Dès la première question,
+elle glisse vers le bas et la conversation apparaît au-dessus, dans un document
+que l'on peut relire, modifier et sauvegarder.
+
+Thème gris mat, texte noir, boutons orange à coins ronds.
 
 ## Fichiers
 
 | Fichier | Rôle |
 | --- | --- |
 | `ecriture.py` | toute l'application |
-| `logo.png` | le logo MARCEAU en 512 px, servant d'icône de fenêtre |
+| `logo.png` | le logo MARCEAU en 512 px, icône de fenêtre |
 | `logo_64.png` | le même en 64 px, pour la barre des tâches |
+| `logo_accueil.png` | le logo découpé en rond, affiché sur l'accueil |
 
-Les deux PNG sont chargés au démarrage et passés à `iconphoto` : le
-gestionnaire de fenêtres choisit la taille qui lui convient. S'ils manquent,
-l'application démarre quand même, sans icône.
+Les trois PNG sont cherchés à côté du script. S'ils manquent, l'application
+démarre quand même, sans icône ni logo.
 
 ## Lancer
 
@@ -28,17 +33,37 @@ python3 ecriture.py
 ```
 
 Aucune dépendance à installer : seule la bibliothèque standard est utilisée
-(l'appel à l'API passe par `urllib`). Tkinter est généralement livré avec
+(les appels réseau passent par `urllib`). Tkinter est généralement livré avec
 Python ; sur Debian/Ubuntu, s'il manque :
 
 ```bash
 sudo apt install python3-tk
 ```
 
-## Clé API
+## Les IA gratuites, avec Ollama
 
-L'assistant appelle l'API Claude, qui est payante. Il faut une clé
-(`sk-ant-…`) obtenue sur <https://console.anthropic.com>.
+Ollama fait tourner des modèles sur ta machine, sans compte ni carte de crédit.
+Installe-le depuis <https://ollama.com>, puis, dans un terminal :
+
+```bash
+ollama serve            # démarre le service
+ollama pull mistral     # télécharge un modèle (une seule fois)
+```
+
+Quelques modèles qui marchent bien : `mistral`, `llama3.2`, `qwen3`, `gemma3`,
+`deepseek-r1`. Les gros modèles répondent mieux mais demandent plus de mémoire.
+
+L'application lit la liste des modèles installés à chaque ouverture du menu :
+inutile de la relancer après un `ollama pull`. Si Ollama ne tourne pas, seul
+Claude reste proposé.
+
+Ces modèles n'ont **pas** accès à Internet. On leur demande de le dire plutôt
+que d'inventer quand la question porte sur quelque chose de récent.
+
+## Claude et la recherche web
+
+Ce moteur appelle l'API Claude, qui est payante. Il faut une clé (`sk-ant-…`)
+obtenue sur <https://console.anthropic.com>.
 
 À la première question, l'application la demande et l'enregistre dans
 `~/.config/ecriture/cle_api`, en clair, avec les droits `600` (lisible
@@ -51,6 +76,9 @@ utilisée à la place :
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
+Les sources citées s'affichent sous la réponse ; un clic ouvre le lien dans le
+navigateur.
+
 ## Utilisation
 
 | Action | Raccourci |
@@ -58,15 +86,15 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 | Envoyer la question | `Entrée` (ou le bouton **Envoyer**) |
 | Saut de ligne dans la saisie | `Maj` + `Entrée` |
 | Sauvegarder la conversation | `Ctrl` + `S` (ou le bouton **Sauvegarder**) |
+| Changer d'IA | le menu orange sous la boîte |
 | Repartir de zéro | bouton **Nouveau** |
 
-L'assistant garde le fil de la conversation et fait une recherche web quand la
-question porte sur l'actualité, des prix, des horaires ou la météo. Les sources
-citées s'affichent sous la réponse ; un clic ouvre le lien dans le navigateur.
+L'assistant garde le fil de la conversation, quel que soit le moteur — on peut
+commencer avec un modèle local et passer à Claude en cours de route.
 
-Pendant qu'une réponse arrive, « Réflexion en cours… » s'anime et la saisie est
-mise en pause. L'appel tourne dans un fil séparé pour que la fenêtre reste
-réactive. **Nouveau** efface la conversation, remet la saisie au centre et
+Pendant qu'une réponse arrive, « … réfléchit » s'anime et la saisie est mise en
+pause. L'appel tourne dans un fil séparé pour que la fenêtre reste réactive.
+**Nouveau** efface la conversation, ramène le logo et la saisie au centre, et
 ignore la réponse en cours si elle arrive après coup.
 
 Le document du haut est éditable : on peut y corriger le texte avant de le
@@ -79,13 +107,21 @@ Les couleurs, les polices et les proportions sont regroupées en haut de
 
 - `GRIS_FOND`, `GRIS_ZONE`, `GRIS_BORD`, `NOIR`, `ORANGE`, `ORANGE_FONCE`
 - `FAMILLE`, `POLICE`, `POLICE_BOUTON`, `POLICE_INVITE`
+- `RAYON_BOUTON`, `RAYON_ZONE` — l'arrondi des coins, en pixels (0 = carré)
 - `MARGE` (espace sous la saisie), `LARGEUR` (largeur des zones, en fraction de
   la fenêtre), `HAUT_DOC` (hauteur à laquelle commence le document)
-- `LOGO`, `LOGO_PETIT` — les deux fichiers d'icône, cherchés à côté du script
+- `LOGO`, `LOGO_PETIT`, `LOGO_ACCUEIL` — les fichiers d'image
 
-Juste en dessous, les réglages de l'assistant :
+Puis les réglages des IA :
 
-- `MODELE` — le modèle appelé (`claude-sonnet-5`)
-- `RECHERCHES_MAX` — nombre maximum de recherches web par question
-- `FICHIER_CLE` — où la clé est rangée
+- `MODELE_CLAUDE`, `URL_CLAUDE`, `URL_OLLAMA`, `FICHIER_CLE`
+- `RECHERCHES_MAX` — recherches web maximum par question
+- `NOM_CLAUDE` — le nom affiché dans le menu
 - `instructions_systeme()` — le ton et les consignes données à l'assistant
+
+### Les coins ronds
+
+Tkinter ne sait arrondir ni un bouton ni une boîte de texte. La forme est donc
+dessinée sur un `Canvas` (`points_arrondis`, `BoutonRond`, `MenuRond`), et pour
+le texte, `ZoneRonde` pose un vrai `tk.Text` par-dessus, en retrait des coins
+pour que son rectangle ne dépasse pas de l'arrondi.
