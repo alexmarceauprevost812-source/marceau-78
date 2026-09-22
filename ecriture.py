@@ -16,6 +16,7 @@ import random
 import re
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -117,7 +118,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
@@ -1715,6 +1716,87 @@ class Onglet:
             i = suivant
 
 
+# ---------- Le code écrit par l'IA, dans un panneau qui s'ouvre d'un clic ----------
+def colorer_tout(widget, texte, langage, taille):
+    """Colore un texte au complet (pour les panneaux de code de l'assistant)."""
+    for etiquette, (couleur, style) in COULEURS_CODE.items():
+        widget.tag_configure(etiquette, foreground=couleur,
+                             font=(FAMILLE_CODE, taille, style) if style else (FAMILLE_CODE, taille))
+    texte = texte[:200_000]   # un fichier géant reste lisible, juste pas coloré au complet
+    departs = [0] + [m.end() for m in re.finditer("\n", texte)]
+    for a, b, etiquette in jetons(texte, langage):
+        la = bisect_right(departs, a) - 1
+        lb = bisect_right(departs, b) - 1
+        widget.tag_add(etiquette, f"{1 + la}.{a - departs[la]}", f"{1 + lb}.{b - departs[lb]}")
+
+
+class PanneauCode(tk.Frame):
+    """Un fichier écrit par Codex : fermé au début, un clic sur la barre l'ouvre pis montre tout le code."""
+    FOND_BARRE = "#333333"
+    HAUTEUR_MAX = 380      # hauteur max du code une fois ouvert (après, ça défile)
+    TAILLE = 10            # taille du code dans le panneau
+
+    def __init__(self, parent, app, chemin, contenu, largeur, nouveau, ouvrir_editeur):
+        super().__init__(parent, bg=self.FOND_BARRE)
+        self.app = app
+        self.ouvert = False
+        lignes = contenu.count("\n") + (0 if contenu.endswith("\n") else 1)
+        tk.Frame(self, width=largeur, height=0, bg=self.FOND_BARRE).pack()   # fixe la largeur
+
+        # La barre garde toujours la même largeur, même avec un long nom de fichier
+        barre = tk.Frame(self, bg=self.FOND_BARRE, cursor="hand2", width=largeur, height=36)
+        barre.pack(fill="x")
+        barre.pack_propagate(False)
+        bouton_orange(barre, "Éditeur", lambda: ouvrir_editeur(chemin), taille=9).pack(side="right", padx=8)
+        self.fleche = tk.Label(barre, text="▸", bg=self.FOND_BARRE, fg=ORANGE, font=(FAMILLE, 13, "bold"))
+        self.fleche.pack(side="left", padx=(10, 6))
+        titre = Path(chemin).name
+        nom = tk.Label(barre, text=titre if len(titre) <= 26 else titre[:25] + "…", bg=self.FOND_BARRE,
+                       fg="#f0f0f0", font=(FAMILLE, 10, "bold"), anchor="w")
+        nom.pack(side="left")
+        info = tk.Label(barre, text=f"{lignes} ligne{'s' if lignes > 1 else ''} · "
+                                    f"{'nouveau' if nouveau else 'modifié'}",
+                        bg=self.FOND_BARRE, fg="#a0a0a0", font=(FAMILLE, 9), anchor="w")
+        info.pack(side="left", padx=(8, 0), fill="x", expand=True)
+        for w in (barre, self.fleche, nom, info):
+            w.bind("<Button-1>", self.basculer)
+
+        # Le code (caché tant que le panneau est fermé)
+        self.corps = tk.Frame(self, bg=CODE_FOND, height=1)
+        self.corps.pack_propagate(False)
+        defil_y = barre_defilement(self.corps, "vertical", CODE_FOND)
+        defil_x = barre_defilement(self.corps, "horizontal", CODE_FOND)
+        self.texte = tk.Text(self.corps, wrap="none", bg=CODE_FOND, fg=CODE_TEXTE,
+                             font=(FAMILLE_CODE, self.TAILLE), relief="flat", bd=0, highlightthickness=0,
+                             padx=10, pady=6, selectbackground=CODE_SELECTION, selectforeground="#ffffff",
+                             insertwidth=0, yscrollcommand=defil_y.set, xscrollcommand=defil_x.set)
+        defil_y.config(command=self.texte.yview)
+        defil_x.config(command=self.texte.xview)
+        defil_y.pack(side="right", fill="y")
+        defil_x.pack(side="bottom", fill="x")
+        self.texte.pack(side="left", fill="both", expand=True)
+        self.texte.insert("1.0", contenu)
+        colorer_tout(self.texte, contenu, langage_de(chemin), self.TAILLE)
+        self.texte.config(state="disabled")   # on lit ici; on modifie dans l'éditeur
+        hauteur_ligne = tkfont.Font(family=FAMILLE_CODE, size=self.TAILLE).metrics("linespace")
+        self.cible = min(self.HAUTEUR_MAX, lignes * hauteur_ligne + 12 + 14)
+
+    def basculer(self, event=None):
+        self.ouvert = not self.ouvert
+        self.fleche.config(text="▾" if self.ouvert else "▸")
+        if self.ouvert and not self.corps.winfo_manager():
+            self.corps.config(height=1)
+            self.corps.pack(fill="x")
+        depart = max(1, self.corps.winfo_height()) if self.corps.winfo_manager() else 1
+
+        def fini():
+            if not self.ouvert:
+                self.corps.pack_forget()
+
+        self.app.animer(f"panneau{id(self)}", depart, self.cible if self.ouvert else 1,
+                        lambda v: self.corps.config(height=max(1, int(v))), fini, etapes=14)
+
+
 # ---------- Le Codex : fichiers GitHub à gauche, éditeur au centre, assistant à droite ----------
 class CodexVue(tk.Frame):
     L_FICHIERS = 250
@@ -1740,6 +1822,8 @@ class CodexVue(tk.Frame):
         self.etat_label = tk.Label(self, text="", anchor="w", bg=GRIS_MENU, fg=NOIR,
                                    font=(FAMILLE, 10), padx=14, pady=5)
         self.etat_label.pack(side="bottom", fill="x")
+        self.construire_saisie()
+        self.zone_bas.pack(side="bottom", fill="x")
         self.corps = tk.Frame(self, bg=GRIS_FOND)
         self.corps.pack(fill="both", expand=True)
         self.construire_fichiers()
@@ -1809,20 +1893,27 @@ class CodexVue(tk.Frame):
         p.pack_propagate(False)
         tk.Label(p, text="Assistant Codex", bg=GRIS_FOND, fg=NOIR, anchor="w",
                  font=(FAMILLE, 11, "bold")).pack(fill="x", padx=12, pady=(10, 6))
-        bas = tk.Frame(p, bg=GRIS_FOND)
-        bas.pack(side="bottom", fill="x", padx=12, pady=(6, 10))
-        self.saisie = tk.Text(bas, height=3, width=1, **style_zone(12))
-        self.saisie.pack(fill="x")
-        rang = tk.Frame(bas, bg=GRIS_FOND)
-        rang.pack(fill="x", pady=(8, 0))
-        self.app.creer_bouton_moteur(rang).pack(side="left")
-        bouton_orange(rang, "Envoyer", self.envoyer).pack(side="right")
         self.chat = tk.Text(p, width=1, **style_zone(12))
-        self.chat.pack(fill="both", expand=True, padx=12)
+        self.chat.pack(fill="both", expand=True, padx=12, pady=(0, 10))
         self.app.configurer_tags(self.chat, 12, taille_reponse=13)
         self.chat.insert("end", "Demande-moi ce que tu veux changer dans ton projet. Pas besoin "
                                 "d'ouvrir les fichiers : j'trouve moi-même les bons, j'les lis "
                                 "pis j'les corrige.\n", "attente")
+
+    def construire_saisie(self):
+        """La boîte où tu écris, en bas au centre de l'écran, comme dans le chat."""
+        zone = self.zone_bas = tk.Frame(self, bg=GRIS_FOND, height=118)
+        zone.pack_propagate(False)
+        centre = tk.Frame(zone, bg=GRIS_FOND)
+        centre.place(relx=0.5, rely=0.5, anchor="center", relwidth=LARGEUR)
+        ligne = tk.Frame(centre, bg=GRIS_FOND)
+        ligne.pack(fill="x")
+        bouton_orange(ligne, "Envoyer", self.envoyer).pack(side="right", padx=(10, 0), fill="y")
+        self.saisie = tk.Text(ligne, height=2, width=1, **style_zone())
+        self.saisie.pack(side="left", fill="x", expand=True)
+        options = tk.Frame(centre, bg=GRIS_FOND)
+        options.pack(fill="x", pady=(8, 0))
+        self.app.creer_bouton_moteur(options).pack(side="left")
         self.saisie.bind("<Return>", self.envoyer)
         self.saisie.bind("<Shift-Return>", lambda e: (self.saisie.insert("insert", "\n"), "break")[1])
 
@@ -2205,6 +2296,8 @@ class CodexVue(tk.Frame):
                 self.app.ouvrir_parametres("claude")
                 return "break"
         self.saisie.delete("1.0", "end")
+        if not self.ouverts["assistant"]:
+            self.basculer("assistant")   # pour voir la réponse arriver
         if not self.messages:
             self.chat.delete("1.0", "end")   # enlève le mot d'accueil
         self.chat.insert("end", question + "\n", "question")
@@ -2254,10 +2347,13 @@ class CodexVue(tk.Frame):
             return
         self.cache.update(resultat["lus"])
         explication, fichiers = extraire_fichiers(resultat["texte"] or "")
-        ecrits = [self.appliquer_fichier(chemin, contenu) for chemin, contenu in fichiers]
+        ecrits = []   # (chemin, contenu, nouveau fichier?)
+        for chemin, contenu in fichiers:
+            nouveau = chemin.removeprefix("./").lstrip("/") not in self.arbre
+            ecrits.append((self.appliquer_fichier(chemin, contenu), contenu, nouveau))
         resume = explication or ("C'est fait, regarde les fichiers." if ecrits else
                                  "Pas de réponse cette fois-ci. Reformule ta demande.")
-        note = f"\n(Fichiers écrits : {', '.join(ecrits)})" if ecrits else ""
+        note = f"\n(Fichiers écrits : {', '.join(c for c, _, _ in ecrits)})" if ecrits else ""
         self.messages.append({"role": "assistant", "content": resume + note})
         self.app.ecrire(self.chat, resume, lambda: True,
                         lambda: self.fin_reponse(ecrits, resultat["vus"]))
@@ -2280,19 +2376,20 @@ class CodexVue(tk.Frame):
         if vus:
             noms = ", ".join(Path(c).name for c in vus[:8]) + (f" (+{len(vus) - 8})" if len(vus) > 8 else "")
             self.chat.insert("end", f"Fichiers lus : {noms}\n", "sources")
+        chemins = [c for c, _, _ in ecrits]
         # Si t'as coché « Pousser tout seul », ça part sur GitHub sans rien demander.
-        if ecrits and self.depot and self.auto_push.get():
+        if chemins and self.depot and self.auto_push.get():
             self.chat.insert("end", "J'envoie ça sur GitHub…\n", "sources")
             self.chat.see("end")
-            self.enregistrer([o for o in self.onglets if o.chemin in set(ecrits)])
+            self.enregistrer([o for o in self.onglets if o.chemin in set(chemins)])
             self.occupe = False
             return
-        for chemin in ecrits:
-            etiquette = f"fichier{self.nb_liens}"
-            self.nb_liens += 1
-            self.chat.insert("end", "Fichier écrit : ", "sources")
-            self.chat.insert("end", chemin + "\n", ("sources", "lien", etiquette))
-            self.chat.tag_bind(etiquette, "<Button-1>", lambda e, c=chemin: self.activer_chemin(c))
+        largeur = max(self.chat.winfo_width() - 30, 260)
+        for chemin, contenu, nouveau in ecrits:
+            panneau = PanneauCode(self.chat, self.app, chemin, contenu, largeur, nouveau,
+                                  self.activer_chemin)
+            self.chat.window_create("end", window=panneau, pady=4)
+            self.chat.insert("end", "\n")
         if ecrits:
             self.chat.insert("end", "Vérifie les changements, pis clique « Enregistrer » pour les "
                              "envoyer sur GitHub.\n" if self.depot else
@@ -3084,6 +3181,7 @@ class AppEcriture(tk.Tk):
         self.bouton_menu.lift()
         self.maj_navigation()
         self.fermer_menu()
+        self.codex.saisie.focus_set()
 
     def fermer_codex(self):
         if self.codex is not None:

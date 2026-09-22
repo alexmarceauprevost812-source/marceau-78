@@ -223,6 +223,11 @@ liste tes dépôts.
   `[LIRE]`), pis il peut en redemander d'autres avant d'écrire — deux tours au
   maximum, pour pas tourner en rond ;
 - **Scanner** lit tout le projet d'un coup, si tu veux forcer ;
+- **le code écrit par l'IA s'affiche en panneaux dépliables** dans l'assistant :
+  le nom du fichier, son nombre de lignes, s'il est neuf ou modifié. Un clic
+  ouvre le code au complet, coloré, en lecture seule; le bouton **Éditeur**
+  l'ouvre dans un onglet modifiable ;
+- **la boîte où tu écris est en bas au centre**, comme dans le chat ;
 - l'assistant écrit des fichiers complets dans des blocs `[FICHIER …]`, qui
   s'ouvrent en onglets **sans rien envoyer** sur GitHub ;
 - **Enregistrer** (ou `Ctrl` + `S`) envoie les onglets modifiés sur GitHub.
