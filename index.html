@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Écriture</title>
+<meta name="description" content="Un espace d'écriture minimaliste en Python, avec un assistant IA à côté : modèles locaux gratuits via Ollama, ou Claude avec recherche web.">
+<link rel="icon" href="/logo_64.png">
+<style>
+  :root {
+    --fond: #101010;
+    --fond-carte: #191919;
+    --bord: #2b2b2b;
+    --texte: #e8e6e3;
+    --doux: #a5a19c;
+    --orange: #ff7a1a;
+    --orange-clair: #ffa059;
+    --lime: #7fff00;
+    --r: 18px;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--fond);
+    color: var(--texte);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
+    overflow-x: hidden;
+  }
+  .enveloppe { max-width: 1000px; margin: 0 auto; padding: 0 16px; }
+  a { color: var(--orange-clair); }
+
+  /* ---------- Accueil ---------- */
+  .accueil {
+    text-align: center;
+    padding: 72px 0 56px;
+    position: relative;
+  }
+  .accueil::before {
+    content: "";
+    position: absolute; inset: -10% -50% auto; height: 520px;
+    background: radial-gradient(ellipse at 50% 0, rgba(255,122,26,.16), transparent 62%);
+    pointer-events: none;
+  }
+  .accueil > * { position: relative; }
+  .marque {
+    width: 168px; height: 168px; border-radius: 50%;
+    display: block; margin: 0 auto 26px;
+    box-shadow: 0 0 60px rgba(255,122,26,.28);
+  }
+  h1 {
+    margin: 0 0 12px;
+    font-size: clamp(2.4rem, 8vw, 3.6rem);
+    letter-spacing: -.02em;
+    line-height: 1.05;
+  }
+  .accroche {
+    margin: 0 auto 28px; max-width: 34rem;
+    font-size: clamp(1.02rem, 3.4vw, 1.2rem); color: var(--doux);
+  }
+  .etiquettes {
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+    margin-bottom: 32px; padding: 0; list-style: none;
+  }
+  .etiquettes li {
+    border: 1px solid var(--bord); border-radius: 999px;
+    padding: 5px 14px; font-size: .84rem; color: var(--doux);
+  }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+  .bouton {
+    display: inline-block; padding: 13px 26px; border-radius: 12px;
+    font-weight: 700; text-decoration: none; font-size: .98rem;
+    border: 1px solid transparent; transition: transform .12s ease, background .12s ease;
+  }
+  .bouton:active { transform: translateY(1px); }
+  .principal { background: var(--orange); color: #140a02; }
+  .principal:hover { background: var(--orange-clair); }
+  .secondaire { border-color: var(--bord); color: var(--texte); }
+  .secondaire:hover { border-color: var(--orange); color: var(--orange-clair); }
+
+  /* ---------- Sections ---------- */
+  section { padding: 52px 0; border-top: 1px solid var(--bord); }
+  h2 {
+    margin: 0 0 8px; font-size: clamp(1.45rem, 5vw, 1.9rem);
+    letter-spacing: -.01em;
+  }
+  .sous-titre { margin: 0 0 30px; color: var(--doux); max-width: 46rem; }
+
+  figure { margin: 0 0 30px; }
+  figure:last-of-type { margin-bottom: 0; }
+  figure img {
+    width: 100%; height: auto; display: block;
+    border: 1px solid var(--bord); border-radius: var(--r);
+    background: #8c8c8c;
+  }
+  figcaption { margin-top: 10px; color: var(--doux); font-size: .92rem; }
+
+  .grille { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+  .grille-trois { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 860px) { .grille-trois { grid-template-columns: 1fr; } }
+  .carte {
+    background: var(--fond-carte); border: 1px solid var(--bord);
+    border-radius: var(--r); padding: 22px;
+  }
+  .carte h3 { margin: 0 0 6px; font-size: 1.1rem; }
+  .carte p { margin: 0 0 10px; color: var(--doux); font-size: .95rem; }
+  .carte p:last-child { margin-bottom: 0; }
+  .prix { font-size: .8rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .gratuit { color: var(--lime); }
+  .payant { color: var(--orange); }
+
+  pre {
+    background: var(--fond-carte); border: 1px solid var(--bord);
+    border-radius: 12px; padding: 16px 18px; overflow-x: auto;
+    font-size: .92rem; line-height: 1.7; margin: 0 0 16px;
+  }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  pre .invite { color: var(--doux); user-select: none; }
+  pre .comm { color: var(--doux); }
+
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+  th, td { text-align: left; padding: 11px 4px; border-bottom: 1px solid var(--bord); }
+  th { color: var(--doux); font-weight: 600; font-size: .85rem;
+       text-transform: uppercase; letter-spacing: .05em; }
+  kbd {
+    background: var(--fond-carte); border: 1px solid var(--bord);
+    border-bottom-width: 2px; border-radius: 6px;
+    padding: 2px 7px; font-size: .85rem; font-family: inherit; white-space: nowrap;
+  }
+
+  .note {
+    background: var(--fond-carte); border: 1px solid var(--bord);
+    border-left: 3px solid var(--orange);
+    border-radius: 12px; padding: 16px 18px; color: var(--doux); font-size: .94rem;
+  }
+  .note strong { color: var(--texte); }
+
+  footer {
+    border-top: 1px solid var(--bord); padding: 32px 0 48px;
+    color: var(--doux); font-size: .9rem; text-align: center;
+  }
+
+  @media (max-width: 680px) {
+    .grille { grid-template-columns: 1fr; }
+    .accueil { padding: 48px 0 40px; }
+    .marque { width: 128px; height: 128px; }
+    .actions .bouton { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<header class="accueil">
+  <div class="enveloppe">
+    <img class="marque" src="/logo.png" alt="Logo MARCEAU" width="168" height="168">
+    <h1>Écriture</h1>
+    <p class="accroche">
+      Un espace d'écriture minimaliste, avec un assistant qui répond à côté.
+      La page est vide, tu écris au milieu, et tout le reste s'efface.
+    </p>
+    <ul class="etiquettes">
+      <li>Python + Tkinter</li>
+      <li>Aucune dépendance</li>
+      <li>Un seul fichier</li>
+      <li>Testé sous Linux</li>
+    </ul>
+    <div class="actions">
+      <a class="bouton principal" href="/ecriture.py" download>Télécharger ecriture.py</a>
+      <a class="bouton secondaire"
+         href="https://github.com/alexmarceauprevost812-source/marceau-78">Voir le code</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="enveloppe">
+    <h2>À quoi ça ressemble</h2>
+    <p class="sous-titre">
+      La saisie démarre au centre. Dès la première question, elle glisse vers le bas
+      et la conversation prend la place au-dessus.
+    </p>
+
+    <figure>
+      <img src="/captures/accueil.png" alt="L'accueil d'Écriture : le logo au centre, au-dessus de la boîte de saisie" width="1000" height="700">
+      <figcaption>L'accueil — rien d'autre que le logo, l'invite et la boîte de saisie.</figcaption>
+    </figure>
+
+    <figure>
+      <img src="/captures/schema.png" alt="Une réponse avec un schéma de plan : quatre étapes numérotées reliées par des flèches où circule un courant vert" width="1000" height="700">
+      <figcaption>Quand la réponse décrit des étapes, elles se redessinent en schéma animé.</figcaption>
+    </figure>
+
+    <figure>
+      <img src="/captures/moteurs.png" alt="Le menu de choix de l'IA, ouvert au-dessus de la boîte de saisie" width="1000" height="700">
+      <figcaption>Le menu liste les modèles Ollama installés, relus à chaque ouverture.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <div class="enveloppe">
+    <h2>Deux IA au choix</h2>
+    <p class="sous-titre">Le menu sous la boîte de saisie permet de changer en cours de route&nbsp;: le fil de la conversation suit.</p>
+    <div class="grille">
+      <div class="carte">
+        <p class="prix gratuit">Gratuit · hors ligne</p>
+        <h3>Les modèles locaux d'Ollama</h3>
+        <p>
+          <code>mistral</code>, <code>llama3.2</code>, <code>qwen3</code>,
+          <code>gemma3</code>, <code>deepseek-r1</code>… Ils tournent sur ta machine,
+          sans compte ni carte de crédit.
+        </p>
+        <p>Pas d'accès à Internet&nbsp;: on leur demande de le dire plutôt que d'inventer.</p>
+      </div>
+      <div class="carte">
+        <p class="prix payant">Payant · clé API</p>
+        <h3>Claude + recherche web</h3>
+        <p>
+          Pour tout ce qui a pu changer récemment — actualité, prix, horaires, météo.
+          Les sources citées s'affichent sous la réponse et s'ouvrent au clic.
+        </p>
+        <p>La clé reste sur ta machine, dans <code>~/.config/ecriture/</code>, en lecture seule pour toi.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="enveloppe">
+    <h2>Les détails qui comptent</h2>
+    <p class="sous-titre">Trois choses qu'on remarque à l'usage.</p>
+    <div class="grille grille-trois">
+      <div class="carte">
+        <h3>Ça s'écrit devant toi</h3>
+        <p>La réponse arrive lettre par lettre derrière un curseur orange, en une
+        seconde et demie quelle que soit sa longueur.</p>
+      </div>
+      <div class="carte">
+        <h3>Ça parle d'ici</h3>
+        <p>L'assistant répond en français québécois familier. Un réglage
+        (<code>STYLE_QUEBECOIS</code>) le remet en français standard.</p>
+      </div>
+      <div class="carte">
+        <h3>Les plans se dessinent</h3>
+        <p>Des étapes dans la réponse&nbsp;? Elles se redessinent en schéma, avec un
+        courant vert qui les allume l'une après l'autre.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="enveloppe">
+    <h2>Installation</h2>
+    <p class="sous-titre">Un fichier, la bibliothèque standard, et c'est tout.</p>
+    <pre><code><span class="comm"># Tkinter, s'il manque (Debian / Ubuntu)</span>
+<span class="invite">$ </span>sudo apt install python3-tk
+
+<span class="comm"># Lancer</span>
+<span class="invite">$ </span>python3 ecriture.py</code></pre>
+
+    <p class="sous-titre" style="margin-top:26px">Pour les modèles gratuits, installe Ollama depuis <a href="https://ollama.com">ollama.com</a>, puis&nbsp;:</p>
+    <pre><code><span class="invite">$ </span>ollama serve
+<span class="invite">$ </span>ollama pull mistral</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="enveloppe">
+    <h2>Raccourcis</h2>
+    <table>
+      <thead><tr><th>Action</th><th>Touche</th></tr></thead>
+      <tbody>
+        <tr><td>Envoyer la question</td><td><kbd>Entrée</kbd></td></tr>
+        <tr><td>Saut de ligne dans la saisie</td><td><kbd>Maj</kbd> + <kbd>Entrée</kbd></td></tr>
+        <tr><td>Sauvegarder la conversation</td><td><kbd>Ctrl</kbd> + <kbd>S</kbd></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="enveloppe">
+    <p class="note">
+      <strong>Écriture est une application de bureau.</strong>
+      Elle ouvre une fenêtre sur ta machine — elle ne tourne pas dans le navigateur.
+      Cette page sert juste à la présenter et à la télécharger.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="enveloppe">Écriture — MARCEAU</div>
+</footer>
+
+</body>
+</html>

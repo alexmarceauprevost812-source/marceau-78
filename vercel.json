@@ -1,0 +1,11 @@
+{
+  "headers": [
+    {
+      "source": "/ecriture.py",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" },
+        { "key": "Content-Disposition", "value": "attachment; filename=\"ecriture.py\"" }
+      ]
+    }
+  ]
+}
