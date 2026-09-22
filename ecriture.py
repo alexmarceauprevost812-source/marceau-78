@@ -16,7 +16,10 @@ import os
 import queue
 import random
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -25,6 +28,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+import wave
 import webbrowser
 from bisect import bisect_right
 from pathlib import Path
@@ -125,7 +129,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 HEURES_MAJ = 6         # on revérifie les mises à jour aux 6 heures, même si l'app reste ouverte
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
@@ -1675,15 +1679,6 @@ MESSAGE_MICRO = (
     "3. Choisis-le dans Paramètres → Son → Entrée\n\n"
     "Ensuite, ferme pis rouvre Marceau.")
 
-MESSAGE_PIPER = manque(
-    "Piper (la lecture à voix haute)",
-    "pip install piper-tts",
-    "Il faut aussi télécharger une voix française, une seule fois :\n"
-    f"    python3 -m piper.download_voices {VOIX_PIPER} --download-dir ~/.local/share/ecriture/voix\n\n"
-    "Sur Ubuntu récent, pip refuse d'installer dans le Python du système. Fais plutôt :\n"
-    "    python3 -m venv ~/ecriture-venv\n"
-    "    ~/ecriture-venv/bin/pip install piper-tts")
-
 _whisper = None
 _voix_piper = None
 
@@ -1760,47 +1755,12 @@ def charger_voix():
 
 def telecharger_voix():
     """Télécharge la voix française (une seule fois : après, ça marche sans Internet)."""
-    import subprocess
     DOSSIER_VOIX.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, "-m", "piper.download_voices", VOIX_PIPER,
                     "--download-dir", str(DOSSIER_VOIX)], check=True, capture_output=True)
     if fichier_voix() is None:
         raise RuntimeError("La voix ne s'est pas téléchargée.")
     return True
-
-
-def fabriquer_son(texte):
-    """Écrit le texte lu dans un fichier .wav, pis rend son chemin."""
-    import wave
-    DOSSIER_VOIX.mkdir(parents=True, exist_ok=True)
-    chemin = DOSSIER_VOIX / f"lecture-{datetime.datetime.now():%Y%m%d-%H%M%S}.wav"
-    voix = charger_voix()
-    with wave.open(str(chemin), "wb") as f:
-        voix.synthesize_wav(texte, f)
-    return chemin
-
-
-def jouer_son(chemin):
-    """Joue le fichier. On essaie sounddevice, sinon les lecteurs du système."""
-    import wave
-    try:
-        import numpy, sounddevice
-        with wave.open(str(chemin), "rb") as f:
-            taux = f.getframerate()
-            son = numpy.frombuffer(f.readframes(f.getnframes()), dtype="int16")
-        sounddevice.play(son, taux)
-        sounddevice.wait()
-        return
-    except Exception:
-        pass        # pas de PortAudio : on passe aux lecteurs du système
-    import shutil
-    import subprocess
-    for outil in ("paplay", "aplay", "ffplay"):
-        if shutil.which(outil):
-            options = ["-nodisp", "-autoexit", "-loglevel", "quiet"] if outil == "ffplay" else []
-            subprocess.run([outil] + options + [str(chemin)], check=True, capture_output=True)
-            return
-    raise RuntimeError("Aucun lecteur de son trouvé. Installe-en un :  sudo apt install alsa-utils")
 
 
 def arreter_son():
@@ -1810,6 +1770,214 @@ def arreter_son():
         sounddevice.stop()
     except Exception:
         pass
+
+
+# ----- La voix qui lit les réponses de l'IA (chat pis Codex) -----
+LONGUEUR_VOIX = 4000        # on lit un bon bout, pas un roman : au-delà, on coupe à la fin d'une phrase
+VOIX_SYSTEME = ("spd-say", "espeak-ng", "espeak")   # déjà sur la plupart des Ubuntu de bureau
+
+MESSAGE_VOIX = (
+    "Aucune voix n'est installée sur ton ordi.\n\n"
+    "La plus simple, la voix du système :\n"
+    "    sudo apt install speech-dispatcher espeak-ng\n\n"
+    "Pour une voix plus naturelle (Piper) — sur Ubuntu récent, pip refuse d'installer dans\n"
+    "le Python du système, faque on passe par un environnement à part :\n"
+    "    python3 -m venv ~/ecriture-venv\n"
+    "    ~/ecriture-venv/bin/pip install piper-tts\n"
+    f"    ~/ecriture-venv/bin/python -m piper.download_voices {VOIX_PIPER} \\\n"
+    "        --download-dir ~/.local/share/ecriture/voix\n\n"
+    "Ensuite, ferme pis rouvre Marceau.")
+
+
+def texte_pour_voix(texte):
+    """Ce qui se dit bien à voix haute : pas de code, pas d'adresse web, pas de symboles."""
+    texte = re.sub(r"```.*?(```|$)", " ", texte or "", flags=re.S)
+    texte = re.sub(r"\[(PLAN|STUDIO|LIRE)\].*?(\[/\1\]|$)", " ", texte, flags=re.S | re.I)
+    texte = re.sub(r"\[FICHIER[^\]]*\].*?(\[/FICHIER\]|$)", " ", texte, flags=re.S | re.I)
+    texte = re.sub(r"\[(M[ÉE]T[ÉE]O|IMAGE)[^\]]*\]", " ", texte, flags=re.I)
+    texte = URL_WEB.sub(" ", texte)                   # « h t t p s deux-points… » : non merci
+    texte = re.sub(r"`([^`]*)`", r"\1", texte)
+    texte = re.sub(r"^\s*(?:[-•*]|\d+[.)])\s+", "", texte, flags=re.M)   # les puces de liste
+    texte = re.sub(r"[*_#>|~=\[\]{}<]+", " ", texte)
+    texte = "".join(c for c in texte if unicodedata.category(c) != "So")   # les émojis
+    texte = re.sub(r"\(\s*\)", " ", texte)
+    texte = re.sub(r"[ \t]+", " ", texte)
+    texte = re.sub(r"\s*\n\s*", "\n", texte).strip()
+    texte = texte.lstrip("-–—•,.;: ")        # jamais de « - » au début : ça passerait pour une option
+    if len(texte) > LONGUEUR_VOIX:
+        coupe = texte[:LONGUEUR_VOIX]
+        fin = max(coupe.rfind(". "), coupe.rfind("! "), coupe.rfind("? "), coupe.rfind("\n"))
+        texte = coupe[:fin + 1] if fin > LONGUEUR_VOIX // 2 else coupe
+    return texte.strip()
+
+
+def decouper_phrases(texte):
+    """Des phrases pas trop courtes : la première se dit vite, pis on peut couper entre deux."""
+    phrases = []
+    for morceau in re.split(r"(?<=[.!?…:;])\s+|\n+", texte):
+        morceau = morceau.strip()
+        if not morceau:
+            continue
+        if phrases and len(phrases[-1]) < 40:
+            phrases[-1] += " " + morceau     # une phrase de trois mots se colle à la suivante
+        else:
+            phrases.append(morceau)
+    return phrases
+
+
+def piper_installe():
+    """Piper est-il là? On regarde sans l'importer : l'importer gèlerait la fenêtre une seconde."""
+    import importlib.util
+    return importlib.util.find_spec("piper") is not None
+
+
+def moteur_voix():
+    """La voix qu'on a : Piper (naturelle) si elle est là, sinon celle du système. None : aucune."""
+    if fichier_voix() is not None and piper_installe():
+        return "piper"
+    for outil in VOIX_SYSTEME:
+        if shutil.which(outil):
+            return outil
+    return None
+
+
+def synthese_piper(phrase):
+    """Une phrase lue par Piper, dans un fichier temporaire (effacé après l'avoir joué)."""
+    descripteur, chemin = tempfile.mkstemp(suffix=".wav", prefix="marceau-voix-")
+    os.close(descripteur)
+    with wave.open(chemin, "wb") as f:
+        charger_voix().synthesize_wav(phrase, f)
+    return chemin
+
+
+class Voix:
+    """Lit à voix haute dans un fil à part. Une nouvelle lecture coupe l'ancienne.
+
+    parle : True pendant qu'une lecture est en cours.
+    sur_changement : appelé quand ça commence ou finit de parler (pour les boutons).
+    """
+    SONDE = 0.05       # aux combien de secondes on regarde si on doit se taire
+
+    def __init__(self, sur_changement=None):
+        self.generation = 0
+        self.parle = False
+        self.processus = None
+        self.dernier_moteur = None
+        self.sur_changement = sur_changement or (lambda: None)
+        self.verrou = threading.Lock()
+
+    def moteur(self):
+        return moteur_voix()
+
+    def parler(self, texte):
+        """Commence à lire. Rend False s'il n'y a rien à dire, ou pas de voix."""
+        texte = texte_pour_voix(texte)
+        moteur = self.moteur() if texte else None
+        if not moteur:
+            return False
+        with self.verrou:
+            self.generation += 1
+            generation = self.generation
+            self._couper()
+            self.parle = True
+            self.dernier_moteur = moteur
+        self.sur_changement()
+        threading.Thread(target=self._lire, args=(texte, generation, moteur), daemon=True).start()
+        return True
+
+    def taire(self):
+        """Arrête tout de suite ce qui se lit."""
+        with self.verrou:
+            self.generation += 1
+            self._couper()
+            parlait, self.parle = self.parle, False
+        if parlait:
+            self.sur_changement()
+
+    def _couper(self):
+        """Coupe le son en cours (appelé avec le verrou)."""
+        if self.processus is not None and self.processus.poll() is None:
+            try:
+                self.processus.kill()
+            except OSError:
+                pass
+        self.processus = None
+        if self.dernier_moteur == "piper":
+            arreter_son()
+        elif self.dernier_moteur == "spd-say":
+            try:   # spd-say parle par un service : tuer le petit programme suffit pas
+                subprocess.run(["spd-say", "-C"], capture_output=True, timeout=3)
+            except Exception:
+                pass
+
+    def _encore(self, generation):
+        return generation == self.generation
+
+    def _lancer(self, commande, generation):
+        """Lance un programme pis attend qu'il finisse — ou le tue si on doit se taire."""
+        with self.verrou:
+            if not self._encore(generation):
+                return
+            self.processus = subprocess.Popen(commande, stdout=subprocess.DEVNULL,
+                                              stderr=subprocess.DEVNULL)
+            processus = self.processus
+        while processus.poll() is None:
+            if not self._encore(generation):
+                try:
+                    processus.kill()
+                except OSError:
+                    pass
+                return
+            time.sleep(self.SONDE)
+
+    def _jouer(self, chemin, generation):
+        """Joue un .wav : sounddevice si possible, sinon le lecteur du système."""
+        try:
+            import numpy
+            import sounddevice
+            with wave.open(str(chemin), "rb") as f:
+                taux = f.getframerate()
+                son = numpy.frombuffer(f.readframes(f.getnframes()), dtype="int16")
+            sounddevice.play(son, taux)
+            while sounddevice.get_stream().active:
+                if not self._encore(generation):
+                    sounddevice.stop()
+                    return
+                time.sleep(self.SONDE)
+            return
+        except Exception:
+            pass        # pas de PortAudio, ou pas de sortie de son : on passe au lecteur du système
+        for outil in ("paplay", "aplay", "ffplay"):
+            if shutil.which(outil):
+                options = ["-nodisp", "-autoexit", "-loglevel", "quiet"] if outil == "ffplay" else []
+                self._lancer([outil] + options + [str(chemin)], generation)
+                return
+        raise RuntimeError("Aucun lecteur de son trouvé. Installe-en un :  sudo apt install alsa-utils")
+
+    def _lire(self, texte, generation, moteur):
+        try:
+            if moteur == "piper":
+                for phrase in decouper_phrases(texte):   # la 1re phrase se dit pendant que Piper prépare les autres
+                    if not self._encore(generation):
+                        break
+                    chemin = synthese_piper(phrase)
+                    try:
+                        self._jouer(chemin, generation)
+                    finally:
+                        Path(chemin).unlink(missing_ok=True)   # pas de .wav qui s'empilent
+            elif moteur == "spd-say":
+                self._lancer(["spd-say", "-w", "-l", "fr", texte], generation)
+            else:
+                self._lancer([moteur, "-v", "fr", texte], generation)
+        except Exception:
+            pass        # une voix qui marche pas ne doit jamais faire planter l'app
+        finally:
+            with self.verrou:
+                fini = self._encore(generation) and self.parle
+                if fini:
+                    self.parle = False
+            if fini:
+                self.sur_changement()
 
 
 class FenetreDictee(tk.Toplevel):
@@ -3341,7 +3509,9 @@ class CodexVue(tk.Frame):
         defil.config(command=self.chat.yview)
         defil.pack(side="right", fill="y", pady=(8, 10))
         self.chat.pack(side="left", fill="both", expand=True, pady=(8, 10))
-        self.app.configurer_tags(self.chat, 12, taille_reponse=14)
+        # Le retrait laisse la place au petit logo Marceau devant chaque réponse
+        self.app.configurer_tags(self.chat, 12, retrait=LOGO_AVATAR + 12 if self.app.logo else 0,
+                                 taille_reponse=14)
         self.mot_accueil()
 
     def mot_accueil(self):
@@ -3385,6 +3555,7 @@ class CodexVue(tk.Frame):
         options.pack(fill="x", pady=(8, 0))
         self.app.creer_bouton_moteur(options).pack(side="left")
         self.app.bouton_image(options, self.joindre_images).pack(side="left", padx=(8, 0))
+        self.app.creer_bouton_voix(options).pack(side="left", padx=(8, 0))
         self.cadre_pieces = tk.Frame(options, bg=GRIS_FOND)
         self.cadre_pieces.pack(side="left")
         self.saisie.bind("<Return>", self.envoyer)
@@ -3827,6 +3998,8 @@ class CodexVue(tk.Frame):
             self.app.montrer_vignettes(self.chat, pieces, 90)
         depot, branche, token = self.depot, self.branche, self.token
         arbre, cache = dict(self.arbre), dict(self.cache)
+        self.app.voix.taire()           # on arrête de lire l'ancienne réponse
+        self.app.avatar(self.chat)      # le logo Marceau devant la réponse qui s'en vient
         self.points = ajouter_ligne_attente(self.chat, f"Codex ({nom_court(moteur)}) regarde ton projet",
                                             14, ("attente", "attente_codex"))
         self.occupe = True
@@ -3893,8 +4066,13 @@ class CodexVue(tk.Frame):
         tous = [c for c, _, _, _ in ecrits] + [c for c, _ in images_ajoutees]
         note = f"\n(Fichiers écrits : {', '.join(tous)})" if tous else ""
         self.messages.append({"role": "assistant", "content": resume + note})
-        self.app.ecrire(self.chat, resume, lambda: True,
-                        lambda: self.fin_reponse(ecrits, resultat["vus"], images_ajoutees))
+        def fini():
+            self.fin_reponse(ecrits, resultat["vus"], images_ajoutees)
+            # L'explication, pas le code (ça, ça se lit mal). Un avertissement va dans le Codex,
+            # pas dans le chat caché en dessous.
+            self.app.dire_a_voix_haute(resume, self.chat)
+
+        self.app.ecrire(self.chat, resume, lambda: True, fini)
 
     def appliquer_fichier(self, chemin, contenu):
         """Met le fichier écrit par l'IA dans un onglet (rien part sur GitHub avant « Enregistrer »)."""
@@ -4040,7 +4218,10 @@ class AppEcriture(tk.Tk):
         self.image_courante = None   # la dernière image de la conversation (pour le Studio)
         self.image_courante_chemin = None
         self.occupe_magie = False    # un pouvoir magique est en train de travailler
-        self.lecture_en_cours = False
+        self.boutons_voix = []       # le bouton 🔊 du chat pis celui du Codex
+        self.voix_active = lire_reglages().get("voix", True)   # l'IA lit ses réponses à voix haute
+        self.voix_avertie = False    # on explique une seule fois comment avoir une voix
+        self.voix = Voix(sur_changement=lambda: self.depuis_fil(self.maj_boutons_voix))
         self.schemas = []
         self.question_en_cours = ""
         self.menu_ouvert = False
@@ -4100,6 +4281,7 @@ class AppEcriture(tk.Tk):
         self.bouton_image(self.options, self.joindre_images).pack(side="left", padx=(8, 0))
         bouton_orange(self.options, "\u2728  Magie", self.ouvrir_menu_magie, taille=10).pack(
             side="left", padx=(8, 0))
+        self.creer_bouton_voix(self.options).pack(side="left", padx=(8, 0))
         self.cadre_pieces = tk.Frame(self.options, bg=GRIS_FOND)
         self.cadre_pieces.pack(side="left")
 
@@ -4814,6 +4996,7 @@ class AppEcriture(tk.Tk):
             self.points_ia = None
         self.images_tk = []
         self.image_courante = self.image_courante_chemin = None
+        self.voix.taire()
         self.document.delete("1.0", "end")
         self.document.edit_reset()   # on repart à neuf : Ctrl+Z ne ramène pas l'ancienne conversation
         self.title("Marceau")
@@ -4861,6 +5044,7 @@ class AppEcriture(tk.Tk):
             if not messagebox.askyesno("Quitter", "Des fichiers du Codex ont des changements "
                                                   "pas enregistrés.\nQuitter quand même?"):
                 return
+        self.voix.taire()      # sinon la voix du système continue de parler, l'app fermée
         self.destroy()
 
     # ---------- Positions ----------
@@ -4910,6 +5094,7 @@ class AppEcriture(tk.Tk):
                 self.ouvrir_parametres("claude")   # ta question reste dans la boîte
                 return "break"
 
+        self.voix.taire()          # on arrête de lire l'ancienne réponse
         self.saisie.delete("1.0", "end")
         self.document.insert("end", texte + "\n", "question")
         message = {"role": "user", "content": texte}
@@ -4998,6 +5183,7 @@ class AppEcriture(tk.Tk):
                 if operations or avait_image:
                     self.ajouter_studio(operations, reponse)
                 self.fin_reponse(index)
+                self.dire_a_voix_haute(texte)
 
             self.ecrire(self.document, texte, continuer, apres_ecriture)
         else:
@@ -5029,13 +5215,14 @@ class AppEcriture(tk.Tk):
         if index_a_montrer:
             self.document.see(index_a_montrer)   # montre le haut du schéma
 
-    def avatar(self):
-        """Petit logo Marceau devant la réponse de l'agent. Retourne où il est."""
+    def avatar(self, widget=None):
+        """Petit logo Marceau devant la réponse de l'agent (dans le chat ou le Codex). Retourne où il est."""
         if not self.logo:
             return None
-        index = self.document.index("end-1c")
-        self.document.image_create(index, image=self.logo.image(LOGO_AVATAR), padx=3, align="center")
-        self.document.tag_add("avatar", index)
+        widget = widget or self.document
+        index = widget.index("end-1c")
+        widget.image_create(index, image=self.logo.image(LOGO_AVATAR), padx=3, align="center")
+        widget.tag_add("avatar", index)
         return index
 
     # ---------- L'icône de la fenêtre : le logo Marceau ----------
@@ -5161,6 +5348,71 @@ class AppEcriture(tk.Tk):
         fen.bind("<Escape>", lambda e: fen.destroy())
 
 
+    # ---------- La voix : l'IA lit ses réponses, dans le chat comme dans le Codex ----------
+    def creer_bouton_voix(self, parent):
+        """Le bouton 🔊 : allume ou coupe la voix. Pendant qu'elle parle, il la fait taire."""
+        bouton = tk.Button(parent, command=self.clic_voix, fg=NOIR, activebackground=ORANGE_FONCE,
+                           activeforeground=NOIR, font=(FAMILLE, 10, "bold"), relief="flat", bd=0,
+                           highlightthickness=0, padx=12, pady=5, cursor="hand2")
+        self.boutons_voix.append(bouton)
+        self.maj_boutons_voix()
+        return bouton
+
+    def maj_boutons_voix(self):
+        """Les deux boutons (chat pis Codex) disent toujours la même chose."""
+        if self.voix.parle:
+            texte, fond = "\u23f9  Silence", ORANGE
+        elif self.voix_active:
+            texte, fond = "\U0001f50a  Voix", ORANGE
+        else:
+            texte, fond = "\U0001f507  Voix", GRIS_INACTIF
+        for bouton in list(self.boutons_voix):
+            try:
+                bouton.config(text=texte, bg=fond)
+            except tk.TclError:
+                self.boutons_voix.remove(bouton)     # son écran a été fermé
+
+    def clic_voix(self):
+        if self.voix.parle:
+            self.voix.taire()          # juste cette réponse-là : la voix reste allumée
+        else:
+            self.voix_active = not self.voix_active
+            reglages = lire_reglages()
+            reglages["voix"] = self.voix_active
+            enregistrer_reglages(reglages)
+            if self.voix_active and self.voix.moteur() is None:
+                self.offrir_une_voix()
+        self.maj_boutons_voix()
+
+    def dire_a_voix_haute(self, texte, widget=None):
+        """Lit une réponse de l'IA, si la voix est allumée."""
+        if not self.voix_active or not texte:
+            return
+        if self.voix.parler(texte) or self.voix.moteur() is not None:
+            return
+        if not self.voix_avertie:       # une seule fois, pas à chaque réponse
+            self.voix_avertie = True
+            (widget or self.document).insert(
+                "end", "(Pour entendre les réponses, il faut une voix sur ton ordi : "
+                       "sudo apt install speech-dispatcher espeak-ng — ou coupe la voix "
+                       "avec le bouton \U0001f50a.)\n", "sources")
+
+    def offrir_une_voix(self, ensuite=None):
+        """Aucune voix : on offre de télécharger la voix Piper, sinon on explique quoi installer."""
+        if not piper_installe():
+            messagebox.showinfo("Voix", MESSAGE_VOIX, parent=self)
+            return
+        if not messagebox.askyesno(
+                "Voix",
+                f"La voix française ({VOIX_PIPER}) n'est pas encore sur ton ordi.\n\n"
+                "La télécharger maintenant? Ça prend environ 60 Mo et une connexion "
+                "Internet, une seule fois : après, la lecture marche hors ligne.",
+                parent=self):
+            return
+        self.pouvoir("Je télécharge la voix française", telecharger_voix,
+                     lambda _: ensuite() if ensuite else self.dire_magie("La voix française est prête."),
+                     besoin_ollama=False)
+
     # ---------- Les pouvoirs magiques ----------
     def construire_menu_magie(self):
         """Le menu ✨ Magie : les pouvoirs qui roulent sur ton ordi, gratuitement."""
@@ -5176,7 +5428,7 @@ class AppEcriture(tk.Tk):
         menu.add_command(label="\U0001f4dc  Résumer", command=self.magie_resumer)
         menu.add_separator()
         menu.add_command(label="\U0001f3a4  Dicter", command=self.magie_dicter)
-        menu.add_command(label="\u23f9  Arrêter la lecture" if self.lecture_en_cours else
+        menu.add_command(label="\u23f9  Arrêter la lecture" if self.voix.parle else
                                "\U0001f50a  Lire à voix haute", command=self.magie_lire)
         traduire = tk.Menu(menu, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
                            activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
@@ -5267,8 +5519,6 @@ class AppEcriture(tk.Tk):
 
         def apres(resultat, err):
             self.occupe_magie = False
-            if err:
-                self.lecture_en_cours = False
             if generation != self.generation:
                 points.destroy()
                 return              # on a changé de conversation entre-temps
@@ -5493,42 +5743,18 @@ class AppEcriture(tk.Tk):
 
     # --- 6. 🔊 Lire à voix haute ---
     def magie_lire(self):
+        if self.voix.parle:
+            self.voix.taire()
+            self.dire_magie("Lecture arrêtée.")
+            return
         texte, _, _ = self.texte_choisi()
         if not texte:
             self.dire_magie("Écris ou sélectionne un texte à lire.")
             return
-        if self.lecture_en_cours:
-            arreter_son()
-            self.lecture_en_cours = False
-            self.dire_magie("Lecture arrêtée.")
+        if self.voix.moteur() is None:
+            self.offrir_une_voix(ensuite=self.magie_lire)
             return
-        try:
-            import piper                                     # noqa: F401
-        except ImportError:
-            messagebox.showinfo("Lire", MESSAGE_PIPER, parent=self)
-            return
-        if fichier_voix() is None:
-            if not messagebox.askyesno(
-                    "Lire à voix haute",
-                    f"La voix française ({VOIX_PIPER}) n'est pas encore sur ton ordi.\n\n"
-                    "La télécharger maintenant? Ça prend environ 60 Mo et une connexion "
-                    "Internet, une seule fois : après, la lecture marche hors ligne.",
-                    parent=self):
-                return
-            self.pouvoir("Je télécharge la voix française", telecharger_voix,
-                         lambda _: self.magie_lire(), besoin_ollama=False)
-            return
-        bout = texte[:5000]     # on lit un bon bout, pas un livre au complet
-        self.lecture_en_cours = True
-
-        def travail():
-            jouer_son(fabriquer_son(bout))
-            return True
-
-        def fini(_):
-            self.lecture_en_cours = False
-
-        self.pouvoir("Je lis ton texte à voix haute", travail, fini, besoin_ollama=False)
+        self.voix.parler(texte)      # même si la voix des réponses est coupée : tu l'as demandé
 
     # --- 1. ✨ Continuer mon texte ---
     def magie_continuer(self):

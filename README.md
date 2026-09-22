@@ -118,7 +118,7 @@ prend tout le texte du document.
 | 🎭 Changer le style | réécrit en québécois, formel, drôle ou poétique | Ollama |
 | 📜 Résumer | ajoute un résumé **sous** ton texte, sans rien effacer | Ollama |
 | 🎤 Dicter | ta voix devient du texte, là où est ton curseur | faster-whisper |
-| 🔊 Lire à voix haute | lit ton texte avec une voix française | Piper |
+| 🔊 Lire à voix haute | lit ton texte avec une voix française | Piper, ou la voix du système |
 | 🌍 Traduire | français ↔ anglais, sans Internet | Argos Translate |
 
 Tout roule **en arrière-plan** : la fenêtre ne gèle jamais, et les trois
@@ -287,7 +287,51 @@ sauvegarder en `.txt`.
 Au démarrage, le logo Marceau trône au-dessus de la boîte d'écriture. À la
 première question, il glisse vers la gauche en rapetissant, et se réinstalle
 en haut du document ; il revient au centre avec **Nouveau**. Un petit avatar
-du même logo précède chaque réponse.
+du même logo précède chaque réponse — dans le chat **et dans le Codex**, même
+un message d'erreur. La version web fait pareil.
+
+## L'IA lit ses réponses à voix haute
+
+Le bouton **🔊 Voix**, sous la boîte d'écriture du chat comme du Codex, fait
+lire chaque réponse à voix haute une fois qu'elle est écrite. Il est **allumé
+par défaut**.
+
+| Le bouton dit | Ça veut dire | Un clic… |
+| --- | --- | --- |
+| 🔊 Voix | la voix est allumée | la coupe |
+| 🔇 Voix (gris) | la voix est coupée | la rallume |
+| ⏹ Silence | elle est en train de lire | fait taire **cette** réponse ; la voix reste allumée |
+
+Une nouvelle question, **Nouveau** ou fermer l'app font taire la réponse en
+cours. Le choix allumé/coupé est gardé pour la prochaine fois.
+
+Ce qui est lu : le texte de la réponse, **jamais** le code (dans le Codex, on
+entend l'explication, pas les fichiers), ni les adresses web, ni les émojis,
+ni les blocs `[PLAN]`, `[MÉTÉO]`, `[FICHIER]`. Une très longue réponse est
+coupée à la fin d'une phrase, vers 4000 caractères.
+
+### Quelle voix
+
+L'app prend la meilleure qu'elle trouve, dans cet ordre :
+
+1. **Piper** — une voix naturelle (voir « La voix française » plus haut).
+2. **spd-say** — la voix du système, déjà là sur la plupart des Ubuntu de
+   bureau ; elle suit tes réglages d'accessibilité.
+3. **espeak-ng** — plus robotique, mais toujours là.
+
+S'il n'y en a aucune, l'app le dit **une seule fois** avec la commande à taper :
+
+```bash
+sudo apt install speech-dispatcher espeak-ng
+```
+
+Piper lit **phrase par phrase** : la première se dit pendant que les suivantes
+se préparent, et **⏹ Silence** coupe entre deux. Aucun fichier son ne reste
+sur ton disque.
+
+Dans la **version web**, c'est la voix du navigateur (rien à installer, ça
+marche sur un téléphone) : une voix `fr-CA` si ton appareil en a une, sinon une
+autre voix française.
 
 Pillow (`pip install pillow`) rend le redimensionnement plus doux, mais reste
 facultatif : sans lui, Tkinter divise la taille par un nombre entier.

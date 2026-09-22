@@ -5,7 +5,8 @@
 // api.github.com directement (GitHub autorise ça : Access-Control-Allow-Origin: *),
 // faque ton token reste sur ton appareil, exactement comme ta clé Claude.
 (function () {
-const { $, creer, lire, ecrire, flux, moteurActuel, sansReflexion, annoncer, CLE_GITHUB } = window.Ecriture;
+const { $, creer, lire, ecrire, flux, moteurActuel, sansReflexion, annoncer, CLE_GITHUB,
+        parler, taire, deverrouillerVoix } = window.Ecriture;
 
 const CLE_DEPOT = "ecriture.codexDepot";
 const CLE_AUTOPUSH = "ecriture.codexAutoPush";
@@ -654,6 +655,8 @@ async function envoyer() {
   if (!depot) { etat("Ouvre d'abord un projet.", "mal"); return; }
 
   saisie.value = "";
+  taire();                     // on arrête de lire l'ancienne réponse
+  deverrouillerVoix();
   occupe = true;
   touches = new Map();          // les changements de CETTE demande-là
   $("#codex-envoyer").disabled = true;
@@ -752,6 +755,7 @@ async function envoyer() {
   } else {
     para.textContent = touches.size ? "C'est fait." : "Pas de changement cette fois-ci.";
   }
+  parler(para.textContent);     // l'explication, lue à voix haute (le code, lui, est dans les cartes)
   cartes(boite);
   if (touches.size && !autoPush()) {
     boite.append(creer("div", "codex-geste",

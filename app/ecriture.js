@@ -552,10 +552,128 @@ function texteVisible(brut, fini) {
   return fini ? t : t.slice(0, Math.max(0, t.length - 6));
 }
 
+/* ---------- La voix : l'IA lit ses réponses, dans le chat comme dans le Codex ----------
+   C'est la voix du navigateur (speechSynthesis) : rien à installer, pis ça marche sur un
+   téléphone. On découpe en phrases : la première se dit tout de suite, pis certains
+   navigateurs coupent une lecture trop longue d'un coup. */
+const CLE_VOIX = "ecriture.voix";
+const LONGUEUR_VOIX = 4000;
+const synthese = "speechSynthesis" in window ? window.speechSynthesis : null;
+let voixParle = false;
+let lotVoix = 0;            // chaque lecture a son numéro : une vieille lecture annulée ne dérange pas la nouvelle
+let voixDeverrouillee = false;
+
+const voixActive = () => lire(CLE_VOIX) !== "non";      // allumée par défaut
+
+function texteVoix(texte) {
+  let t = String(texte || "")
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/\[(PLAN|STUDIO|LIRE)\][\s\S]*?(\[\/\1\]|$)/gi, " ")
+    .replace(/\[FICHIER[^\]]*\][\s\S]*?(\[\/FICHIER\]|$)/gi, " ")
+    .replace(/\[(M[ÉE]T[ÉE]O|IMAGE)[^\]]*\]/gi, " ")
+    .replace(/(?:https?:\/\/|www\.)[^\s<>"'«»]+/gi, " ")   // une adresse web lue à voix haute : du bruit
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/^\s*(?:[-•*]|\d+[.)])\s+/gm, "")              // les puces de liste
+    .replace(/[*_#>|~=[\]{}<]+/g, " ")
+    .replace(/\p{Extended_Pictographic}/gu, "")             // les émojis
+    .replace(/\(\s*\)/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
+    .trim();
+  if (t.length > LONGUEUR_VOIX) {
+    const coupe = t.slice(0, LONGUEUR_VOIX);
+    const fin = Math.max(coupe.lastIndexOf(". "), coupe.lastIndexOf("! "),
+                         coupe.lastIndexOf("? "), coupe.lastIndexOf("\n"));
+    t = fin > LONGUEUR_VOIX / 2 ? coupe.slice(0, fin + 1) : coupe;
+  }
+  return t.trim();
+}
+
+function phrasesVoix(texte) {
+  const phrases = [];
+  for (const morceau of texte.split(/(?<=[.!?…:;])\s+|\n+/)) {
+    const m = morceau.trim();
+    if (!m) continue;
+    if (phrases.length && phrases[phrases.length - 1].length < 40) phrases[phrases.length - 1] += " " + m;
+    else phrases.push(m);
+  }
+  return phrases;
+}
+
+function voixFrancaise() {
+  const toutes = synthese ? synthese.getVoices() : [];
+  return toutes.find((v) => /^fr[-_]CA/i.test(v.lang))     // l'accent d'ici, s'il est là
+      || toutes.find((v) => /^fr\b/i.test(v.lang)) || null;
+}
+
+/** Lit un texte. force = true : même si la voix des réponses est coupée. */
+function parler(texte, force = false) {
+  if (!synthese || (!force && !voixActive())) return false;
+  const propre = texteVoix(texte);
+  if (!propre) return false;
+  synthese.cancel();
+  const lot = ++lotVoix;
+  const voix = voixFrancaise();
+  const phrases = phrasesVoix(propre);
+  let reste = phrases.length;
+  for (const phrase of phrases) {
+    const u = new SpeechSynthesisUtterance(phrase);
+    u.lang = voix?.lang || "fr-CA";
+    if (voix) u.voice = voix;
+    u.onend = u.onerror = () => {
+      if (lot !== lotVoix) return;                           // une lecture annulée : on l'ignore
+      if (--reste <= 0) { voixParle = false; majBoutonsVoix(); }
+    };
+    synthese.speak(u);
+  }
+  voixParle = true;
+  majBoutonsVoix();
+  return true;
+}
+
+function taire() {
+  if (!synthese) return;
+  lotVoix += 1;
+  synthese.cancel();
+  voixParle = false;
+  majBoutonsVoix();
+}
+
+/** Sur iPhone, la voix doit être « réveillée » par un vrai clic avant de pouvoir parler plus tard. */
+function deverrouillerVoix() {
+  if (!synthese || voixDeverrouillee || !voixActive()) return;
+  voixDeverrouillee = true;
+  const u = new SpeechSynthesisUtterance(" ");
+  u.volume = 0;
+  synthese.speak(u);
+}
+
+function majBoutonsVoix() {
+  for (const b of document.querySelectorAll(".bouton.voix")) {
+    if (!synthese) { b.hidden = true; continue; }
+    const active = voixActive();
+    b.textContent = voixParle ? "⏹ Silence" : active ? "🔊 Voix" : "🔇 Voix";
+    b.classList.toggle("coupee", !voixParle && !active);
+    b.setAttribute("aria-pressed", String(active));
+    b.title = voixParle ? "Arrêter de lire cette réponse"
+      : active ? "L'IA lit ses réponses à voix haute. Clique pour couper."
+      : "Clique pour que l'IA lise ses réponses à voix haute.";
+  }
+}
+
+function clicVoix() {
+  if (voixParle) { taire(); return; }        // juste cette réponse-là : la voix reste allumée
+  ecrire(CLE_VOIX, voixActive() ? "non" : "oui");
+  if (voixActive()) deverrouillerVoix();
+  majBoutonsVoix();
+}
+
 async function envoyer() {
   if (occupe) return;
   const question = saisie.value.trim();
   if (!question) return;
+  taire();                   // on arrête de lire l'ancienne réponse
+  deverrouillerVoix();
   const moteur = moteurActuel();
   if (!moteur) return;
 
@@ -626,6 +744,7 @@ async function envoyer() {
   if (etapes.length) doc.append(schema(etapes));
   if (sources.length) doc.append(blocSources(sources));
   messages.push({ role: "assistant", content: para.textContent, etapes, sources });
+  parler(para.textContent);   // la réponse, lue à voix haute
   occupe = false;
   doc.scrollTop = doc.scrollHeight;
   sauverSession();
@@ -669,6 +788,7 @@ async function majOllama() {
 
 /* ---------- Boutons ---------- */
 function nouveau(refermer = true) {
+  taire();
   generation += 1;
   occupe = false;
   messages = [];
@@ -749,7 +869,7 @@ function dessinerModelesGratuits(installes = []) {
 }
 
 /* ---------- L'app : s'installer, pis se tenir à jour ---------- */
-const VERSION_APP = "2.0.0";
+const VERSION_APP = "2.3.0";
 let inviteInstall = null;      // le navigateur nous prête son « Installer »
 let rechargeFaite = false;
 
@@ -824,6 +944,7 @@ addEventListener("offline", majApp);
 /* ---------- Ce que le Codex emprunte ici ---------- */
 window.Ecriture = {
   $, creer, lire, ecrire, flux, moteurActuel, sansReflexion, annoncer,
+  parler, taire, deverrouillerVoix,
   CLE_GITHUB,
   QUEBECOIS,
   fermerMenu: () => fermerMenu(),
@@ -831,6 +952,8 @@ window.Ecriture = {
 
 /* ---------- Branchements ---------- */
 $("#envoyer").onclick = envoyer;
+for (const b of document.querySelectorAll(".bouton.voix")) b.onclick = clicVoix;
+majBoutonsVoix();
 $("#nouveau").onclick = () => nouveau();
 $("#nouveau-menu").onclick = () => nouveau();
 $("#sauvegarder").onclick = sauvegarder;
