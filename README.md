@@ -1,9 +1,15 @@
 # marceau-78
 
-**Écriture** — un espace d'écriture minimaliste en Python/Tkinter, doublé d'un
+**Marceau** — un espace d'écriture minimaliste en Python/Tkinter, doublé d'un
 assistant qui répond aux questions.
 
 Page de présentation : <https://marceau-78.vercel.app>
+
+> **Le nom.** L'application s'appelle **Marceau**. Le fichier, lui, reste
+> `ecriture.py`, et tes réglages restent dans `~/.config/ecriture/` et
+> `~/.local/share/ecriture/` : c'est ce qui permet à la mise à jour
+> automatique de continuer de marcher et à ta clé API, tes conversations
+> pis tes images de rester en place.
 
 Plusieurs agents au choix, dans un menu sous la boîte de saisie :
 
@@ -29,7 +35,7 @@ Thème gris mat, texte noir, boutons orange à coins ronds.
 | `logo_marceau.png` | le logo de l'agent, en 320 px, qui glisse du centre vers la gauche |
 | `logo_192.png`, `logo_maskable.png` | les icônes de l'app installable |
 | `index.html` | la page de présentation publiée sur Vercel |
-| `app/` | la version web d'Écriture (`/app` sur le site) |
+| `app/` | la version web de Marceau (`/app` sur le site) |
 | `app/sw.js` | le service worker : l'app hors ligne et ses mises à jour |
 | `app/manifest.webmanifest` | ce qui rend la version web installable |
 | `api/chat.js` | la fonction serverless qui parle à Claude, clé côté serveur |
@@ -101,7 +107,7 @@ python3 -m venv ~/ecriture-venv
 ~/ecriture-venv/bin/pip install -r requirements.txt
 ```
 
-Ensuite, lance Écriture avec ce Python-là :
+Ensuite, lance Marceau avec ce Python-là :
 
 ```bash
 ~/ecriture-venv/bin/python ecriture.py
@@ -546,7 +552,7 @@ plutôt que d'un bloc à la fin. La fonction est limitée à 60 secondes.
 
 ## Se télécharger, pis se tenir à jour
 
-Écriture connaît son propre numéro de version (`VERSION`, en haut du script).
+Marceau connaît son propre numéro de version (`VERSION`, en haut du script).
 Les deux versions se mettent à jour toutes seules, chacune à sa manière.
 
 ### La version de bureau
@@ -563,7 +569,7 @@ GitHub et compare les deux numéros. S'il y a du neuf :
 Puis elle te dit de redémarrer. Elle ne redémarre jamais toute seule pendant que
 t'écris.
 
-L'adresse est **écrite en dur dans le script** : Écriture ne téléchargera jamais
+L'adresse est **écrite en dur dans le script** : Marceau ne téléchargera jamais
 de code venu d'ailleurs, même si un fichier de configuration disait le
 contraire. Ça reste du code qui se remplace lui-même à partir d'Internet, faque
 ça vaut ce que vaut ta confiance envers ce dépôt-là : si t'aimes mieux décider

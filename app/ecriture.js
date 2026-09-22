@@ -1,4 +1,4 @@
-// Écriture — version web.
+// Marceau — version web.
 // Trois façons de répondre, et dans deux cas sur trois rien ne passe par le serveur :
 //   • Ollama       : le navigateur parle à http://localhost:11434 sur TON ordi
 //   • Claude (ta clé) : le navigateur parle à api.anthropic.com, ta clé reste chez toi
@@ -749,7 +749,7 @@ function dessinerModelesGratuits(installes = []) {
 }
 
 /* ---------- L'app : s'installer, pis se tenir à jour ---------- */
-const VERSION_APP = "1.7.0";
+const VERSION_APP = "2.0.0";
 let inviteInstall = null;      // le navigateur nous prête son « Installer »
 let rechargeFaite = false;
 
@@ -815,7 +815,7 @@ addEventListener("beforeinstallprompt", (e) => {
 });
 addEventListener("appinstalled", () => {
   inviteInstall = null;
-  annoncer("Écriture est installée. Tu peux l'ouvrir comme n'importe quelle app.");
+  annoncer("Marceau est installée. Tu peux l'ouvrir comme n'importe quelle app.");
   majApp();
 });
 addEventListener("online", majApp);

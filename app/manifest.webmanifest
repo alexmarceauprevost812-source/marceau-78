@@ -1,6 +1,6 @@
 {
-  "name": "Écriture",
-  "short_name": "Écriture",
+  "name": "Marceau",
+  "short_name": "Marceau",
   "description": "Un espace d'écriture avec un assistant qui parle québécois.",
   "lang": "fr-CA",
   "start_url": "/app/",

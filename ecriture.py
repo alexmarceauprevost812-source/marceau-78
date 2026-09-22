@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Écriture — espace d'écriture + assistant IA québécois + Codex GitHub
+# Marceau — espace d'écriture + assistant IA québécois + Codex GitHub
 #   - Menu à gauche (☰) : tes conversations sauvegardées + le Codex
 #   - IA gratuites en local avec Ollama, ou Claude + recherche web (payant)
 #   - Schémas animés quand l'IA explique un plan d'action
@@ -123,7 +123,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "1.9.1"
+VERSION = "2.0.0"
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
@@ -443,7 +443,7 @@ def lister_sessions():
 # ---------- GitHub ----------
 def github(methode, chemin, token, corps=None):
     entetes = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
-               "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Ecriture-Codex"}
+               "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Marceau-Codex"}
     donnees = None
     if corps is not None:
         donnees = json.dumps(corps).encode("utf-8")
@@ -759,7 +759,7 @@ def sans_accents(texte):
 
 
 def lire_json(url):
-    requete = urllib.request.Request(url, headers={"User-Agent": "Ecriture-app"})
+    requete = urllib.request.Request(url, headers={"User-Agent": "Marceau-app"})
     with urllib.request.urlopen(requete, timeout=15) as rep:
         return json.loads(rep.read().decode("utf-8"))
 
@@ -1577,7 +1577,7 @@ def manque(quoi, commande, pourquoi=""):
     return (f"{quoi} n'est pas installé sur ton ordi.\n\n"
             f"Pour l'ajouter, copie-colle ça dans un terminal :\n\n{commande}\n\n"
             + (pourquoi + "\n\n" if pourquoi else "")
-            + "Ensuite, ferme pis rouvre Écriture.")
+            + "Ensuite, ferme pis rouvre Marceau.")
 
 
 MESSAGE_OLLAMA = (
@@ -1662,7 +1662,7 @@ MESSAGE_MICRO = (
     "1. Installe la librairie audio :  sudo apt install libportaudio2\n"
     "2. Regarde si le système le voit :  arecord -l\n"
     "3. Choisis-le dans Paramètres → Son → Entrée\n\n"
-    "Ensuite, ferme pis rouvre Écriture.")
+    "Ensuite, ferme pis rouvre Marceau.")
 
 MESSAGE_PIPER = manque(
     "Piper (la lecture à voix haute)",
@@ -2186,7 +2186,7 @@ def chercher_maj(timeout=20):
     Retourne (version, code_source) si une version plus récente existe,
     (None, "") si t'es déjà à jour, et lève une erreur si ça n'a pas marché.
     """
-    requete = urllib.request.Request(URL_MAJ, headers={"User-Agent": f"Ecriture/{VERSION}"})
+    requete = urllib.request.Request(URL_MAJ, headers={"User-Agent": f"Marceau/{VERSION}"})
     with urllib.request.urlopen(requete, timeout=timeout) as reponse:
         texte = reponse.read().decode("utf-8")
     version = version_du_texte(texte)
@@ -3595,7 +3595,7 @@ class CodexVue(tk.Frame):
 class AppEcriture(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Écriture")
+        self.title("Marceau")
         self.geometry("1100x720")
         self.minsize(960, 560)
         self.configure(bg=GRIS_FOND)
@@ -4385,7 +4385,7 @@ class AppEcriture(tk.Tk):
         self.image_courante = self.image_courante_chemin = None
         self.document.delete("1.0", "end")
         self.document.edit_reset()   # on repart à neuf : Ctrl+Z ne ramène pas l'ancienne conversation
-        self.title("Écriture")
+        self.title("Marceau")
         if self.logo:
             self.logo.arreter_suivi()
 
@@ -4863,7 +4863,7 @@ class AppEcriture(tk.Tk):
         if "java" in texte.lower() or isinstance(err, FileNotFoundError):
             return ("LanguageTool a besoin de Java, qui n'est pas installé.\n\n"
                     "Dans un terminal :\n\n    sudo apt install default-jre\n\n"
-                    "Ensuite, ferme pis rouvre Écriture.")
+                    "Ensuite, ferme pis rouvre Marceau.")
         return f"Le correcteur n'a pas démarré : {texte}"
 
     # --- 7. 🌍 Traduire (hors ligne) ---
@@ -5183,7 +5183,7 @@ class AppEcriture(tk.Tk):
         if chemin:
             with open(chemin, "w", encoding="utf-8") as f:
                 f.write(contenu)
-            self.title(f"Écriture — {os.path.basename(chemin)}")
+            self.title(f"Marceau — {os.path.basename(chemin)}")
 
     def nouveau(self):
         # La conversation d'avant est déjà sauvegardée dans le menu de gauche
