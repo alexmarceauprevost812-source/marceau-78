@@ -1,0 +1,35 @@
+# Écriture — ce qu'il faut installer, par morceau.
+#
+# L'app marche SANS rien de tout ça : chaque pouvoir qui manque le dit
+# poliment au lieu de planter. Installe seulement ce dont t'as besoin.
+#
+# Sur Ubuntu récent, pip refuse d'installer dans le Python du système.
+# Fais-toi un environnement à part, une fois pour toutes :
+#
+#     python3 -m venv ~/ecriture-venv
+#     ~/ecriture-venv/bin/pip install -r requirements.txt
+#     ~/ecriture-venv/bin/python ecriture.py
+#
+# Le reste des étapes (Ollama, Java, les modèles à télécharger) est
+# dans le README, section « Installer les pouvoirs magiques ».
+
+# --- Les images pis le Studio ---
+pillow>=10.0
+
+# --- 🪄 Corriger les fautes (demande aussi Java : sudo apt install default-jre) ---
+language_tool_python>=2.8
+
+# --- 🌍 Traduire hors ligne ---
+argostranslate>=1.9
+
+# --- 🎤 Dicter (demande aussi : sudo apt install libportaudio2) ---
+faster-whisper>=1.0
+sounddevice>=0.4
+numpy>=1.24
+
+# --- 🔊 Lire à voix haute ---
+piper-tts>=1.2
+
+# Pas besoin d'installer Ollama avec pip : c'est un programme à part.
+#     curl -fsSL https://ollama.com/install.sh | sh
+#     ollama pull llama3.2

@@ -4657,6 +4657,17 @@ class AppEcriture(tk.Tk):
                 return modele       # sinon le premier modèle local qu'on trouve
         return None
 
+    def modele_local_ou_message(self):
+        """Le modèle Ollama à utiliser. Rend None après avoir expliqué qu'Ollama ne répond pas.
+
+        Il faut vérifier AVANT de bâtir le titre des points d'attente : celui-ci contient
+        le nom du modèle, faque sans ça l'app plantait au lieu d'afficher le message.
+        """
+        modele = self.moteur_local()
+        if modele is None:
+            messagebox.showinfo("Magie", MESSAGE_OLLAMA, parent=self)
+        return modele
+
     def pouvoir(self, titre, travail, fini, besoin_ollama=True):
         """Fait rouler un pouvoir en arrière-plan, avec les 3 points qui sautent.
 
@@ -4744,7 +4755,9 @@ class AppEcriture(tk.Tk):
         if len(texte) > 8000:
             self.dire_magie("C'est un gros morceau. Sélectionne un bout plus court à réécrire.")
             return
-        modele = self.moteur_local()
+        modele = self.modele_local_ou_message()
+        if modele is None:
+            return
         nom, consigne = next((nom, c) for cle, nom, c in STYLES if cle == style)
 
         def fini(reecrit):
@@ -4763,7 +4776,9 @@ class AppEcriture(tk.Tk):
         if not texte:
             self.dire_magie("Écris ou sélectionne un texte à résumer.")
             return
-        modele = self.moteur_local()
+        modele = self.modele_local_ou_message()
+        if modele is None:
+            return
         bout = texte[-12000:]
 
         def fini(resume):
@@ -4943,7 +4958,9 @@ class AppEcriture(tk.Tk):
         if not texte:
             self.dire_magie("Écris d'abord quelque chose, pis je continuerai.")
             return
-        modele = self.moteur_local()
+        modele = self.modele_local_ou_message()
+        if modele is None:
+            return
         bout = texte[-6000:]        # un modèle local n'avale pas un roman d'un coup
 
         def fini(suite):

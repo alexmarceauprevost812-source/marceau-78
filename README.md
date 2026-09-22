@@ -22,6 +22,7 @@ Thème gris mat, texte noir, boutons orange à coins ronds.
 | Fichier | Rôle |
 | --- | --- |
 | `ecriture.py` | toute l'application |
+| `requirements.txt` | ce qu'il faut installer pour les images et les pouvoirs magiques |
 | `logo.png` | le logo MARCEAU en 512 px, icône de fenêtre |
 | `logo_64.png` | le même en 64 px, pour la barre des tâches |
 | `logo_accueil.png` | le logo découpé en rond, affiché sur l'accueil |
@@ -45,13 +46,131 @@ démarre quand même, sans icône ni logo.
 python3 ecriture.py
 ```
 
-Aucune dépendance à installer : seule la bibliothèque standard est utilisée
-(les appels réseau passent par `urllib`). Tkinter est généralement livré avec
-Python ; sur Debian/Ubuntu, s'il manque :
+Le cœur de l'application n'a besoin de rien d'autre que la bibliothèque
+standard (les appels réseau passent par `urllib`). Tkinter est généralement
+livré avec Python ; sur Debian/Ubuntu, s'il manque :
 
 ```bash
 sudo apt install python3-tk
 ```
+
+Les images et les sept **pouvoirs magiques** demandent chacun leur
+bibliothèque — voir `requirements.txt` et la section
+[Les pouvoirs magiques](#les-pouvoirs-magiques--magie). Rien n'est
+obligatoire : ce qui manque est simplement expliqué au lieu de planter.
+
+## Les pouvoirs magiques (✨ Magie)
+
+Sept pouvoirs qui roulent **sur ton ordi**, gratuitement, sans compte et
+sans que ton texte parte sur Internet. Le menu **✨ Magie** s'ouvre de trois
+façons : le bouton dans la barre du haut, le bouton sous la boîte d'écriture,
+ou un **clic droit** sur ton texte.
+
+Chaque pouvoir travaille sur **ta sélection**. Si t'as rien sélectionné, il
+prend tout le texte du document.
+
+| Pouvoir | Ce qu'il fait | Ce qui le fait rouler |
+| --- | --- | --- |
+| ✨ Continuer mon texte | écrit la suite, dans ton ton à toi | Ollama |
+| 🪄 Corriger les fautes | les montre une par une, tu acceptes ou refuses | LanguageTool |
+| 🎭 Changer le style | réécrit en québécois, formel, drôle ou poétique | Ollama |
+| 📜 Résumer | ajoute un résumé **sous** ton texte, sans rien effacer | Ollama |
+| 🎤 Dicter | ta voix devient du texte, là où est ton curseur | faster-whisper |
+| 🔊 Lire à voix haute | lit ton texte avec une voix française | Piper |
+| 🌍 Traduire | français ↔ anglais, sans Internet | Argos Translate |
+
+Tout roule **en arrière-plan** : la fenêtre ne gèle jamais, et les trois
+points qui sautent montrent que ça travaille. **Ctrl+Z** ramène ton texte
+d'avant, en une seule fois, pour n'importe quel pouvoir.
+
+Si quelque chose manque — Ollama pas démarré, modèle pas téléchargé, micro
+introuvable, Java absent — l'app te le dit en français avec la commande
+exacte à copier-coller, au lieu de planter.
+
+### Installer les pouvoirs magiques (Ubuntu / Debian)
+
+Rien n'est obligatoire : installe seulement les pouvoirs qui t'intéressent.
+L'app marche pareil sans eux.
+
+**1. Un environnement Python à part** (Ubuntu récent refuse que `pip`
+installe dans le Python du système) :
+
+```bash
+sudo apt install python3-venv python3-tk
+python3 -m venv ~/ecriture-venv
+~/ecriture-venv/bin/pip install -r requirements.txt
+```
+
+Ensuite, lance Écriture avec ce Python-là :
+
+```bash
+~/ecriture-venv/bin/python ecriture.py
+```
+
+**2. Ollama** — pour Continuer, Changer le style et Résumer :
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull llama3.2
+ollama serve
+```
+
+Le modèle se choisit dans le menu orange sous la boîte d'écriture : les
+pouvoirs se servent de celui que t'as choisi. `llama3.2` est léger et
+rapide ; `mistral` ou `gemma3` écrivent mieux mais demandent plus de RAM.
+
+**3. Java** — pour Corriger les fautes :
+
+```bash
+sudo apt install default-jre
+```
+
+Au premier usage, LanguageTool télécharge son correcteur (~250 Mo). Après,
+il marche sans Internet.
+
+**4. Le micro** — pour Dicter :
+
+```bash
+sudo apt install libportaudio2
+arecord -l          # pour voir si ton micro est reconnu
+```
+
+Au premier usage, faster-whisper télécharge son modèle (~500 Mo pour
+`small`). Pour un modèle plus léger ou plus précis, change `MODELE_WHISPER`
+en haut de `ecriture.py` : `tiny`, `base`, `small`, `medium`, `large-v3`.
+
+**5. La voix française** — pour Lire à voix haute :
+
+```bash
+sudo apt install alsa-utils
+~/ecriture-venv/bin/python -m piper.download_voices fr_FR-siwis-medium \
+  --download-dir ~/.local/share/ecriture/voix
+```
+
+L'app peut aussi la télécharger toute seule : clique **🔊 Lire à voix
+haute**, elle te le proposera.
+
+**6. Les langues de traduction** — pour Traduire :
+
+L'app les télécharge toute seule la première fois que tu cliques
+**🌍 Traduire** (environ 100 Mo par sens). Après, ça marche hors ligne.
+
+### Essayer chaque pouvoir
+
+Écris ou colle un texte dans le document du haut, puis :
+
+| Pouvoir | Comment l'essayer | Ce que tu dois voir |
+| --- | --- | --- |
+| ✨ Continuer | écris deux phrases, ne sélectionne rien, **✨ Magie → Continuer** | un paragraphe s'ajoute à la fin |
+| 🪄 Corriger | écris « Je sui aller a la maison », **→ Corriger** | une fenêtre : « Faute 1 sur 3 », avec Accepter / Refuser |
+| 🎭 Style | sélectionne une phrase, **→ Changer le style → Drôle** | la phrase est remplacée ; Ctrl+Z la ramène |
+| 📜 Résumer | colle un long texte, **→ Résumer** | « Résumé : » apparaît **sous** ton texte |
+| 🎤 Dicter | clique où écrire, **→ Dicter**, parle, **Arrêter** | tes mots s'écrivent au curseur |
+| 🔊 Lire | sélectionne une phrase, **→ Lire à voix haute** | tu l'entends ; le menu offre alors « Arrêter la lecture » |
+| 🌍 Traduire | sélectionne une phrase, **→ Traduire → Français → English** | la phrase devient anglaise |
+
+Si un pouvoir ne répond pas, c'est qu'il manque quelque chose : l'app ouvre
+une fenêtre qui dit exactement quoi taper.
 
 ## Les IA gratuites, avec Ollama
 
