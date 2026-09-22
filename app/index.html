@@ -4,19 +4,49 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Écriture</title>
-<meta name="description" content="Écriture dans le navigateur : pose une question, l'assistant répond et dessine les plans.">
+<meta name="description" content="Écriture dans le navigateur : IA gratuites sur ton ordi avec Ollama, ou Claude avec ta propre clé.">
 <meta name="robots" content="noindex">
 <link rel="icon" href="/logo_64.png">
 <link rel="stylesheet" href="/app/ecriture.css">
 </head>
 <body>
 
-<button class="bouton menu-bouton" id="menu-bouton" aria-label="Conversations">☰</button>
+<button class="bouton menu-bouton" id="menu-bouton" aria-label="Menu">☰</button>
 
 <aside class="menu" id="menu">
   <button class="bouton" id="nouveau-menu">+ Nouvelle conversation</button>
+
   <h2>Conversations</h2>
   <div class="sessions" id="sessions"></div>
+
+  <div class="reglages">
+    <h2>Ta clé Claude</h2>
+    <p class="etat non" id="etat-cle">Aucune clé sur cet appareil</p>
+    <p class="fin">Elle reste dans ce navigateur. Le navigateur appelle Claude
+      directement&nbsp;: <strong>elle ne passe jamais par le serveur du site.</strong></p>
+    <input class="champ" id="cle-claude" type="password" autocomplete="off"
+           spellcheck="false" placeholder="sk-ant-…" aria-label="Ta clé API Claude">
+    <label class="coche"><input type="checkbox" id="montrer-cle"> Montrer</label>
+    <div class="rang-boutons">
+      <button class="bouton petit" id="enregistrer-cle">Enregistrer</button>
+      <button class="bouton petit" id="supprimer-cle">Supprimer</button>
+    </div>
+
+    <h2>IA gratuites (Ollama)</h2>
+    <p class="etat non" id="etat-ollama">Vérification…</p>
+    <div id="aide-ollama" hidden>
+      <p class="fin">Elles tournent sur ton ordi, gratuitement. Installe Ollama depuis
+        <a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com</a>,
+        télécharge un modèle (<code>ollama pull llama3.2</code>), puis démarre-le en
+        autorisant ce site&nbsp;:</p>
+      <code class="commande" id="commande-ollama">OLLAMA_ORIGINS=… ollama serve</code>
+      <div class="rang-boutons">
+        <button class="bouton petit" id="copier-ollama">Copier</button>
+        <button class="bouton petit" id="rafraichir-ollama">Revérifier</button>
+      </div>
+    </div>
+    <p class="fin" id="mot-cle"></p>
+  </div>
 </aside>
 
 <div class="barre">
@@ -35,8 +65,8 @@
     <button class="bouton" id="envoyer">Envoyer</button>
   </div>
   <div class="options">
-    <span class="moteur">Claude + web</span>
-    <span class="astuce">Entrée pour envoyer · Maj+Entrée pour aller à la ligne</span>
+    <select class="moteur" id="moteur" aria-label="Quelle IA répond"></select>
+    <span class="astuce" id="astuce-moteur"></span>
   </div>
 </div>
 

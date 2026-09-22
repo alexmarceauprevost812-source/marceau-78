@@ -214,9 +214,34 @@ mesure, les schémas de plan animés, les sources cliquables, et les
 conversations gardées — cette fois dans le navigateur (`localStorage`), pas sur
 le disque.
 
-Ce qui ne suit pas : **Ollama** (il écoute sur `localhost`, un site hébergé ne
-peut pas l'atteindre) et le **Codex** (il lui faudrait une connexion GitHub
-côté serveur).
+### Trois façons de répondre, au choix dans le menu sous la boîte
+
+| Moteur | Qui appelle qui | Ce qui sort de ton appareil |
+| --- | --- | --- |
+| **Ollama** | ton navigateur → `localhost:11434` | rien |
+| **Claude (ta clé)** | ton navigateur → `api.anthropic.com` | ta question, vers Anthropic |
+| **Claude (clé du site)** | ton navigateur → `/api/chat` → Anthropic | ta question, via le serveur |
+
+**Ta clé Claude ne quitte jamais ton appareil.** Elle est gardée dans le
+navigateur, et c'est le navigateur qui appelle l'API directement — le serveur du
+site ne la voit jamais passer. C'est l'en-tête
+`anthropic-dangerous-direct-browser-access` qui le permet.
+
+### Les IA gratuites depuis le navigateur
+
+Ollama tourne sur ta machine, et le navigateur peut lui parler : l'appel ne
+passe pas par le serveur du site. Il faut juste autoriser le site, sinon Ollama
+refuse l'appel :
+
+```bash
+OLLAMA_ORIGINS=https://marceau-78.vercel.app ollama serve
+```
+
+Le panneau des réglages (bouton **☰**) affiche la commande toute faite avec la
+bonne adresse, et un bouton pour la copier.
+
+Ce qui ne suit pas dans le navigateur : le **Codex**, qui demanderait une
+connexion GitHub côté serveur.
 
 ### La mettre en route
 
@@ -224,11 +249,12 @@ Il faut une variable d'environnement sur Vercel :
 
 | Variable | Rôle |
 | --- | --- |
-| `ANTHROPIC_API_KEY` | obligatoire — la clé Claude, lue seulement par la fonction |
+| `ANTHROPIC_API_KEY` | pour le moteur « clé du site » seulement — lue uniquement par la fonction |
 | `CODE_ACCES` | facultatif — un code demandé aux visiteurs avant chaque question |
 
-**La clé ne part jamais dans le navigateur** : la page appelle `/api/chat`, et
-c'est la fonction serverless qui parle à Claude.
+Ces deux variables ne servent qu'au moteur **« Claude (clé du site) »**. Sans
+elles, les deux autres moteurs marchent quand même : chaque visiteur apporte sa
+propre clé, ou utilise ses modèles Ollama.
 
 ⚠️ **Sans `CODE_ACCES`, n'importe qui ayant le lien peut poser des questions, à
 tes frais.** Mets un code, ou garde la protection Vercel active sur `/app`.

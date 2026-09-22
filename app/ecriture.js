@@ -1,5 +1,8 @@
-// Écriture — version web. Même comportement que l'application de bureau.
-// La clé API n'est jamais ici : c'est /api/chat, côté serveur, qui parle à Claude.
+// Écriture — version web.
+// Trois façons de répondre, et dans deux cas sur trois rien ne passe par le serveur :
+//   • Ollama       : le navigateur parle à http://localhost:11434 sur TON ordi
+//   • Claude (ta clé) : le navigateur parle à api.anthropic.com, ta clé reste chez toi
+//   • Claude (clé du site) : passe par /api/chat, avec la clé du propriétaire
 const $ = (sel) => document.querySelector(sel);
 const creer = (balise, classe, texte) => {
   const e = document.createElement(balise);
@@ -13,90 +16,282 @@ const doc = $("#doc");
 const saisie = $("#saisie");
 const menu = $("#menu");
 const listeSessions = $("#sessions");
+const choixMoteur = $("#moteur");
 
-let messages = [];        // la conversation en cours
+const URL_OLLAMA = "http://localhost:11434";
+const URL_CLAUDE = "https://api.anthropic.com/v1/messages";
+const MODELE_CLAUDE = "claude-sonnet-5";
+const MAX_TOKENS = 8000;
+const RECHERCHES_MAX = 4;
+const VITESSE_MS = 10;        // un paquet de lettres aux 10 ms, comme la version bureau
+const TOURS_ECRITURE = 150;   // ≈ 1,5 s pour écrire une réponse, quelle que soit sa longueur
+
+let messages = [];
 let sessionId = null;
 let occupe = false;
-let generation = 0;       // change à chaque « Nouveau » : les réponses d'avant sont ignorées
+let generation = 0;
+let moteurs = [];             // [{id, nom, type, modele}]
 
-/* ---------- Conversations gardées dans le navigateur ---------- */
-const CLE = "ecriture.sessions";
+/* ---------- Ce qui reste sur l'appareil ---------- */
+const CLE_SESSIONS = "ecriture.sessions";
+const CLE_CLAUDE = "ecriture.cleClaude";
+const CLE_CODE = "ecriture.code";
+const CLE_MOTEUR = "ecriture.moteur";
 
-function lireSessions() {
-  try { return JSON.parse(localStorage.getItem(CLE)) || []; } catch { return []; }
+const lire = (cle) => { try { return localStorage.getItem(cle) || ""; } catch { return ""; } };
+const ecrire = (cle, valeur) => {
+  try { valeur ? localStorage.setItem(cle, valeur) : localStorage.removeItem(cle); }
+  catch { /* navigation privée */ }
+};
+
+/* ---------- Les consignes données à l'IA ---------- */
+const QUEBECOIS =
+  "Tu es un vrai Québécois. Tu parles pis tu écris en français québécois familier, " +
+  "comme quelqu'un d'ici qui jase avec un chum : tu tutoies, tu utilises les tournures " +
+  "orales (y'a, j'suis, t'sais, c'est-tu, faque, pis, ben, là, pantoute, tantôt, astheure) " +
+  "et les expressions d'ici quand ça sonne naturel (c'est l'fun, ça a pas d'allure, " +
+  "lâche pas, c'est correct, mets-en). Garde ça clair et facile à lire, sans en beurrer " +
+  "trop épais : pas de caricature, pas de sacres à moins que la personne en utilise. " +
+  "Les termes techniques, les commandes et le code restent exacts et bien écrits. ";
+
+function instructionsSysteme(web) {
+  const aujourdhui = new Date().toISOString().slice(0, 10);
+  return "Tu es l'assistant intégré à une application d'écriture. " + QUEBECOIS +
+    "Écris seulement en texte brut : pas de Markdown, pas d'astérisques, " +
+    "pas de dièses, pas de tableaux. Pour une liste, utilise des tirets simples. " +
+    (web
+      ? "Fais une recherche web dès que la question touche l'actualité, des prix, " +
+        "des horaires, la météo, des personnes ou n'importe quoi qui a pu changer récemment. "
+      : "Tu n'as pas accès à Internet. Si la question demande des infos récentes " +
+        "(actualité, météo, prix, horaires), dis-le franchement au lieu d'inventer. ") +
+    "Quand ta réponse explique un plan d'action ou des étapes à suivre, termine-la " +
+    "par un bloc exactement comme celui-ci (une étape courte par ligne, moins de 12 mots) :\n" +
+    "[PLAN]\n1. Première étape\n2. Deuxième étape\n[/PLAN]\n" +
+    "Ajoute ce bloc seulement s'il y a un vrai plan ou des étapes. " +
+    `Date d'aujourd'hui : ${aujourdhui}.`;
 }
-function ecrireSessions(liste) {
-  try { localStorage.setItem(CLE, JSON.stringify(liste.slice(0, 60))); } catch { /* mode privé */ }
+
+/* ---------- Les moteurs offerts ---------- */
+async function modelesOllama() {
+  try {
+    const stop = new AbortController();
+    const minuterie = setTimeout(() => stop.abort(), 1800);
+    const rep = await fetch(URL_OLLAMA + "/api/tags", { signal: stop.signal });
+    clearTimeout(minuterie);
+    if (!rep.ok) return [];
+    const data = await rep.json();
+    return (data.models || []).map((m) => m.name)
+      .filter((n) => !n.includes("embed")).sort();
+  } catch {
+    return [];   // Ollama éteint, ou il n'autorise pas ce site
+  }
 }
-function sauverSession() {
-  if (!messages.length) return;
-  const liste = lireSessions().filter((s) => s.id !== sessionId);
-  if (!sessionId) sessionId = String(Date.now());
-  const premiere = messages.find((m) => m.role === "user")?.content || "Conversation";
-  const titre = premiere.replace(/\s+/g, " ").slice(0, 42);
-  liste.unshift({ id: sessionId, titre, modifie: Date.now(), messages });
-  ecrireSessions(liste);
-  dessinerSessions();
+
+async function construireMoteurs() {
+  const installes = await modelesOllama();
+  moteurs = installes.map((nom) => ({
+    id: "ollama:" + nom, nom: nom.replace(/:latest$/, "") + " (gratuit, sur ton ordi)",
+    type: "ollama", modele: nom,
+  }));
+  moteurs.push({ id: "claude:perso", nom: "Claude + web (ta clé)", type: "claude-perso" });
+  moteurs.push({ id: "claude:site", nom: "Claude + web (clé du site)", type: "claude-site" });
+
+  const garde = lire(CLE_MOTEUR);
+  choixMoteur.replaceChildren();
+  for (const m of moteurs) {
+    const option = creer("option", null, m.nom);
+    option.value = m.id;
+    choixMoteur.append(option);
+  }
+  choixMoteur.value = moteurs.some((m) => m.id === garde) ? garde
+    : (installes.length ? moteurs[0].id : "claude:perso");
+  majAstuceMoteur();
+  return installes;
 }
-function dessinerSessions() {
-  listeSessions.replaceChildren();
-  const liste = lireSessions();
-  if (!liste.length) {
-    listeSessions.append(creer("p", "vide", "Aucune conversation encore"));
+
+function moteurActuel() {
+  return moteurs.find((m) => m.id === choixMoteur.value) || moteurs[moteurs.length - 1];
+}
+
+function majAstuceMoteur() {
+  const m = moteurActuel();
+  const astuce = $("#astuce-moteur");
+  if (!m) return;
+  if (m.type === "ollama") astuce.textContent = "Gratuit. Rien ne sort de ton ordinateur.";
+  else if (m.type === "claude-perso") {
+    astuce.textContent = lire(CLE_CLAUDE)
+      ? "Ta clé reste sur cet appareil : le navigateur appelle Claude directement."
+      : "Il faut ta clé Claude — ouvre Paramètres.";
+  } else astuce.textContent = "Utilise la clé du propriétaire du site. Un code peut être demandé.";
+}
+
+/* ---------- Les trois transports ----------
+   Chacun livre la même chose : {type:"texte"|"fin"|"erreur", …} */
+
+async function* revelerParPaquets(texte, sources) {
+  const paquet = Math.max(1, Math.ceil(texte.length / TOURS_ECRITURE));
+  for (let i = 0; i < texte.length; i += paquet) {
+    yield { type: "texte", t: texte.slice(i, i + paquet) };
+    await new Promise((r) => setTimeout(r, VITESSE_MS));
+  }
+  yield { type: "fin", sources };
+}
+
+/** Ollama, sur la machine de la personne. Le serveur du site ne voit rien passer. */
+async function* fluxOllama(messages, modele) {
+  let rep;
+  try {
+    rep = await fetch(URL_OLLAMA + "/api/chat", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: modele, stream: true,
+        messages: [{ role: "system", content: instructionsSysteme(false) }, ...messages],
+      }),
+    });
+  } catch {
+    yield { type: "erreur", message:
+      "Ollama n'a pas répondu. Vérifie qu'il tourne, et qu'il autorise ce site " +
+      "(voir Paramètres)." };
     return;
   }
-  for (const s of liste) {
-    const ligne = creer("div", "session" + (s.id === sessionId ? " active" : ""));
-    const nom = creer("span", null, s.titre);
-    nom.onclick = () => ouvrirSession(s.id);
-    const suppr = creer("button", null, "×");
-    suppr.title = "Supprimer";
-    suppr.onclick = (e) => {
-      e.stopPropagation();
-      ecrireSessions(lireSessions().filter((x) => x.id !== s.id));
-      if (s.id === sessionId) nouveau();
-      else dessinerSessions();
-    };
-    ligne.append(nom, suppr);
-    listeSessions.append(ligne);
+  if (!rep.ok) {
+    const detail = await rep.text().catch(() => "");
+    yield { type: "erreur", message: rep.status === 404
+      ? `Le modèle « ${modele} » n'est pas installé. Dans un terminal : ollama pull ${modele}`
+      : `Ollama a renvoyé l'erreur ${rep.status}. ${detail.slice(0, 120)}` };
+    return;
   }
-}
-function ouvrirSession(id) {
-  const s = lireSessions().find((x) => x.id === id);
-  if (!s) return;
-  nouveau(false);
-  sessionId = s.id;
-  messages = s.messages || [];
-  for (const m of messages) {
-    if (m.role === "user") doc.append(creer("p", "question", m.content));
-    else {
-      doc.append(creer("p", "reponse", m.content));
-      if (m.etapes?.length) doc.append(schema(m.etapes));
-      if (m.sources?.length) doc.append(blocSources(m.sources));
+  const lecteur = rep.body.getReader();
+  const decodeur = new TextDecoder();
+  let tampon = "";
+  for (;;) {
+    const { value, done } = await lecteur.read();
+    if (done) break;
+    tampon += decodeur.decode(value, { stream: true });
+    const lignes = tampon.split("\n");
+    tampon = lignes.pop();
+    for (const ligne of lignes) {
+      if (!ligne.trim()) continue;
+      let objet;
+      try { objet = JSON.parse(ligne); } catch { continue; }
+      const bout = objet.message?.content;
+      if (bout) yield { type: "texte", t: bout };
     }
   }
-  demarrer();
-  dessinerSessions();
-  fermerMenu();
-  doc.scrollTop = doc.scrollHeight;
+  yield { type: "fin", sources: [] };
 }
 
-/* ---------- Mise en page : la saisie glisse vers le bas ---------- */
-function mesurer() {
-  // On mesure seulement ce qui reste une fois démarré (le logo et l'invite s'effacent) :
-  // sinon la descente est sous-estimée et la saisie s'arrête trop haut.
-  const h = $(".rangee").offsetHeight + $(".options").offsetHeight + 8;
-  const marge = parseInt(getComputedStyle(document.documentElement)
-    .getPropertyValue("--marge")) || 25;
-  document.documentElement.style.setProperty(
-    "--descente", `${Math.round(window.innerHeight / 2 - h / 2 - marge)}px`);
-  document.documentElement.style.setProperty("--bas-doc", `${h + marge + 18}px`);
+/** Claude appelé directement par le navigateur, avec la clé de la personne. */
+async function* fluxClaudeDirect(messages, cle) {
+  let conversation = messages;
+  const morceaux = [];
+  const sources = [];
+  for (let tour = 0; tour < 5; tour++) {
+    let rep;
+    try {
+      rep = await fetch(URL_CLAUDE, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": cle,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: MODELE_CLAUDE, max_tokens: MAX_TOKENS,
+          system: instructionsSysteme(true), messages: conversation,
+          tools: [{ type: "web_search_20260209", name: "web_search", max_uses: RECHERCHES_MAX }],
+        }),
+      });
+    } catch {
+      yield { type: "erreur", message:
+        "Le navigateur n'a pas pu joindre Claude. Vérifie ta connexion." };
+      return;
+    }
+    if (!rep.ok) {
+      const data = await rep.json().catch(() => ({}));
+      const detail = data?.error?.message || "";
+      yield { type: "erreur", message:
+        rep.status === 401 ? "Ta clé Claude est refusée. Change-la dans Paramètres."
+        : rep.status === 429 ? "Trop de questions d'un coup. Attends un peu pis réessaie."
+        : rep.status >= 500 ? "Le service est surchargé. Réessaie dans un instant."
+        : `Claude a refusé la demande (${rep.status}). ${detail}` };
+      return;
+    }
+    const data = await rep.json();
+    for (const bloc of data.content || []) {
+      if (bloc.type !== "text") continue;
+      morceaux.push(bloc.text || "");
+      for (const citation of bloc.citations || []) {
+        if (citation.url && !sources.some((s) => s.url === citation.url)) {
+          sources.push({ titre: citation.title || citation.url, url: citation.url });
+        }
+      }
+    }
+    // Longue recherche : l'API met la réponse sur pause, on la relance
+    if (data.stop_reason === "pause_turn") {
+      conversation = [...conversation, { role: "assistant", content: data.content }];
+      continue;
+    }
+    if (data.stop_reason === "max_tokens") morceaux.push("\n\n(Réponse coupée : trop longue.)");
+    break;
+  }
+  yield* revelerParPaquets(morceaux.join("").trim(), sources.slice(0, 5));
 }
-function demarrer() {
-  mesurer();
-  corps.classList.add("demarre");
+
+/** La clé du propriétaire, côté serveur. Un code d'accès peut être demandé. */
+async function* fluxServeur(messages) {
+  const envoi = JSON.stringify({ messages });
+  const appeler = () => {
+    const entetes = { "content-type": "application/json" };
+    const code = lire(CLE_CODE);
+    if (code) entetes["x-code-acces"] = code;
+    return fetch("/api/chat", { method: "POST", headers: entetes, body: envoi });
+  };
+
+  let rep;
+  try { rep = await appeler(); }
+  catch { yield { type: "erreur", message: "Le serveur du site n'a pas répondu." }; return; }
+
+  if (rep.status === 401) {
+    const data = await rep.clone().json().catch(() => ({}));
+    if (data.besoinCode) {
+      const saisi = prompt("Ce site demande un code d'accès :");
+      if (saisi && saisi.trim()) {
+        ecrire(CLE_CODE, saisi.trim());
+        try { rep = await appeler(); } catch { /* on tombera dans le !ok */ }
+      }
+    }
+  }
+  if (!rep.ok) {
+    const data = await rep.json().catch(() => ({}));
+    yield { type: "erreur",
+            message: data.erreur || `Le serveur a répondu ${rep.status}.` };
+    return;
+  }
+
+  const lecteur = rep.body.getReader();
+  const decodeur = new TextDecoder();
+  let tampon = "";
+  for (;;) {
+    const { value, done } = await lecteur.read();
+    if (done) break;
+    tampon += decodeur.decode(value, { stream: true });
+    const morceaux = tampon.split("\n\n");
+    tampon = morceaux.pop();
+    for (const morceau of morceaux) {
+      const ligne = morceau.trim();
+      if (!ligne.startsWith("data:")) continue;
+      try { yield JSON.parse(ligne.slice(5)); } catch { /* morceau incomplet */ }
+    }
+  }
 }
-addEventListener("resize", mesurer);
+
+function flux(moteur, messages) {
+  if (moteur.type === "ollama") return fluxOllama(messages, moteur.modele);
+  if (moteur.type === "claude-perso") return fluxClaudeDirect(messages, lire(CLE_CLAUDE));
+  return fluxServeur(messages);
+}
 
 /* ---------- Le plan et son schéma ---------- */
 const MOTS_PLAN =
@@ -128,7 +323,7 @@ function extrairePlan(texte, question) {
   return [texte, []];
 }
 
-const DUREE_LIEN = 850;   // temps que le courant met à passer d'une étape à l'autre
+const DUREE_LIEN = 850;
 
 function schema(etapes) {
   const bloc = creer("div", "schema");
@@ -151,7 +346,6 @@ function animerSchema(bloc) {
   const etapes = [...bloc.querySelectorAll(".etape")];
   if (!liens.length) return;
   let i = 0;
-
   const remettre = () => {
     for (const e of etapes) e.classList.remove("allumee");
     for (const l of liens) {
@@ -163,9 +357,8 @@ function animerSchema(bloc) {
     i = 0;
     etapes[0].classList.add("allumee");
   };
-
   const avancer = () => {
-    if (!bloc.isConnected) return;   // le schéma a été effacé
+    if (!bloc.isConnected) return;
     if (i >= liens.length) {
       setTimeout(() => { remettre(); setTimeout(avancer, 500); }, 1400);
       return;
@@ -186,7 +379,6 @@ function animerSchema(bloc) {
       avancer();
     }, DUREE_LIEN + 30);
   };
-
   etapes[0].classList.add("allumee");
   setTimeout(avancer, 500);
 }
@@ -197,31 +389,113 @@ function blocSources(sources) {
   for (const s of sources) {
     const ligne = creer("div");
     const a = creer("a", null, s.titre);
-    a.href = s.url;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
+    a.href = s.url; a.target = "_blank"; a.rel = "noopener noreferrer";
     ligne.append(document.createTextNode("- "), a);
     bloc.append(ligne);
   }
   return bloc;
 }
 
-/* ---------- Envoyer une question ---------- */
-function codeAcces() {
-  try { return localStorage.getItem("ecriture.code") || ""; } catch { return ""; }
+/* ---------- Conversations gardées dans le navigateur ---------- */
+function lireSessions() {
+  try { return JSON.parse(localStorage.getItem(CLE_SESSIONS)) || []; } catch { return []; }
+}
+function ecrireSessions(liste) {
+  try { localStorage.setItem(CLE_SESSIONS, JSON.stringify(liste.slice(0, 60))); } catch {}
+}
+function sauverSession() {
+  if (!messages.length) return;
+  const liste = lireSessions().filter((s) => s.id !== sessionId);
+  if (!sessionId) sessionId = String(Date.now());
+  const premiere = messages.find((m) => m.role === "user")?.content || "Conversation";
+  liste.unshift({ id: sessionId, titre: premiere.replace(/\s+/g, " ").slice(0, 42),
+                  modifie: Date.now(), messages });
+  ecrireSessions(liste);
+  dessinerSessions();
+}
+function dessinerSessions() {
+  listeSessions.replaceChildren();
+  const liste = lireSessions();
+  if (!liste.length) {
+    listeSessions.append(creer("p", "vide", "Aucune conversation encore"));
+    return;
+  }
+  for (const s of liste) {
+    const ligne = creer("div", "session" + (s.id === sessionId ? " active" : ""));
+    const nom = creer("span", null, s.titre);
+    nom.onclick = () => ouvrirSession(s.id);
+    const suppr = creer("button", null, "×");
+    suppr.title = "Supprimer";
+    suppr.onclick = (e) => {
+      e.stopPropagation();
+      ecrireSessions(lireSessions().filter((x) => x.id !== s.id));
+      if (s.id === sessionId) nouveau(); else dessinerSessions();
+    };
+    ligne.append(nom, suppr);
+    listeSessions.append(ligne);
+  }
+}
+function ouvrirSession(id) {
+  const s = lireSessions().find((x) => x.id === id);
+  if (!s) return;
+  nouveau(false);
+  sessionId = s.id;
+  messages = s.messages || [];
+  for (const m of messages) {
+    if (m.role === "user") doc.append(creer("p", "question", m.content));
+    else {
+      doc.append(creer("p", "reponse", m.content));
+      if (m.etapes?.length) doc.append(schema(m.etapes));
+      if (m.sources?.length) doc.append(blocSources(m.sources));
+    }
+  }
+  demarrer();
+  dessinerSessions();
+  fermerMenu();
+  doc.scrollTop = doc.scrollHeight;
 }
 
-/** Ce qu'on montre pendant que ça arrive : on cache le bloc [PLAN] avant qu'il s'affiche. */
+/* ---------- Mise en page ---------- */
+function mesurer() {
+  // Seulement ce qui reste une fois démarré : le logo et l'invite s'effacent.
+  const h = $(".rangee").offsetHeight + $(".options").offsetHeight + 8;
+  const marge = parseInt(getComputedStyle(document.documentElement)
+    .getPropertyValue("--marge")) || 25;
+  document.documentElement.style.setProperty(
+    "--descente", `${Math.round(window.innerHeight / 2 - h / 2 - marge)}px`);
+  document.documentElement.style.setProperty("--bas-doc", `${h + marge + 18}px`);
+}
+function demarrer() { mesurer(); corps.classList.add("demarre"); }
+addEventListener("resize", mesurer);
+
+/* ---------- Envoyer une question ---------- */
+/** Enlève la réflexion que certains modèles écrivent entre <think>. */
+function sansReflexion(brut) {
+  const t = brut.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const ouvert = t.search(/<think>/i);
+  return ouvert >= 0 ? t.slice(0, ouvert) : t;
+}
+
+/** Ce qu'on montre PENDANT que ça arrive : le bloc [PLAN] reste caché, il
+    deviendra un schéma. Le texte final, lui, passe par extrairePlan(). */
 function texteVisible(brut, fini) {
-  const i = brut.search(/\[PLAN/i);
-  if (i >= 0) return brut.slice(0, i).trimEnd();
-  return fini ? brut : brut.slice(0, Math.max(0, brut.length - 6));
+  const t = sansReflexion(brut);
+  const plan = t.search(/\[PLAN/i);
+  if (plan >= 0) return t.slice(0, plan).trimEnd();
+  return fini ? t : t.slice(0, Math.max(0, t.length - 6));
 }
 
 async function envoyer() {
   if (occupe) return;
   const question = saisie.value.trim();
   if (!question) return;
+  const moteur = moteurActuel();
+  if (!moteur) return;
+  if (moteur.type === "claude-perso" && !lire(CLE_CLAUDE)) {
+    ouvrirMenu(); $("#cle-claude").focus();
+    $("#mot-cle").textContent = "Colle ta clé Claude ici, pis renvoie ta question.";
+    return;
+  }
 
   const mien = ++generation;
   saisie.value = "";
@@ -229,103 +503,97 @@ async function envoyer() {
   messages.push({ role: "user", content: question });
   if (!corps.classList.contains("demarre")) demarrer();
 
-  const attente = creer("p", "attente", "Marceau réfléchit");
+  const nom = moteur.type === "ollama" ? moteur.modele.replace(/:latest$/, "") : "Marceau";
+  const attente = creer("p", "attente", `${nom} réfléchit`);
   doc.append(attente);
   doc.scrollTop = doc.scrollHeight;
   let points = 0;
   const minuterie = setInterval(() => {
-    attente.textContent = "Marceau réfléchit" + ".".repeat(++points % 4);
+    attente.textContent = `${nom} réfléchit` + ".".repeat(++points % 4);
   }, 400);
   occupe = true;
 
-  const fini = (garder) => {
+  const envoyes = messages.map((m) => ({ role: m.role, content: m.content }));
+  let para = null, curseur = null, brut = "", sources = [], erreur = null;
+
+  const enlever = () => {
     clearInterval(minuterie);
     attente.remove();
-    if (!garder) messages.pop();
-    occupe = false;
-    doc.scrollTop = doc.scrollHeight;
+    curseur?.remove();
   };
 
   try {
-    const corpsEnvoye = JSON.stringify({
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    });
-    const appeler = () => {
-      const entetes = { "content-type": "application/json" };
-      const code = codeAcces();
-      if (code) entetes["x-code-acces"] = code;
-      return fetch("/api/chat", { method: "POST", headers: entetes, body: corpsEnvoye });
-    };
-
-    let reponse = await appeler();
-    if (!reponse.ok && reponse.status === 401) {
-      const data = await reponse.clone().json().catch(() => ({}));
-      if (data.besoinCode) {
-        const saisi = prompt("Ce site demande un code d'accès :");
-        if (saisi && saisi.trim()) {
-          try { localStorage.setItem("ecriture.code", saisi.trim()); } catch { /* mode privé */ }
-          reponse = await appeler();   // on relance tout de suite, pas besoin de retaper
+    for await (const ev of flux(moteur, envoyes)) {
+      if (mien !== generation) { enlever(); return; }   // « Nouveau » pendant la réponse
+      if (ev.type === "texte") {
+        if (!para) {
+          clearInterval(minuterie);
+          attente.remove();
+          para = creer("p", "reponse");
+          curseur = creer("span", "curseur", "▌");
+          doc.append(para, curseur);
         }
+        brut += ev.t;
+        para.textContent = texteVisible(brut, false);
+        doc.scrollTop = doc.scrollHeight;
+      } else if (ev.type === "fin") {
+        sources = ev.sources || [];
+      } else if (ev.type === "erreur") {
+        erreur = ev.message;
       }
     }
-
-    if (!reponse.ok) {
-      const data = await reponse.json().catch(() => ({}));
-      fini(false);
-      doc.append(creer("p", "reponse", data.erreur || `Le serveur a répondu ${reponse.status}.`));
-      doc.scrollTop = doc.scrollHeight;
-      return;
-    }
-
-    clearInterval(minuterie);
-    attente.remove();
-    const para = creer("p", "reponse");
-    const curseur = creer("span", "curseur", "▌");
-    doc.append(para, curseur);
-
-    const lecteur = reponse.body.getReader();
-    const decodeur = new TextDecoder();
-    let tampon = "", brut = "", sources = [], erreur = null;
-
-    for (;;) {
-      const { value, done } = await lecteur.read();
-      if (done) break;
-      tampon += decodeur.decode(value, { stream: true });
-      const morceaux = tampon.split("\n\n");
-      tampon = morceaux.pop();
-      for (const morceau of morceaux) {
-        const ligne = morceau.trim();
-        if (!ligne.startsWith("data:")) continue;
-        let evenement;
-        try { evenement = JSON.parse(ligne.slice(5)); } catch { continue; }
-        if (evenement.type === "texte") {
-          brut += evenement.t;
-          para.textContent = texteVisible(brut, false);
-          doc.scrollTop = doc.scrollHeight;
-        } else if (evenement.type === "fin") {
-          sources = evenement.sources || [];
-        } else if (evenement.type === "erreur") {
-          erreur = evenement.message;
-        }
-      }
-    }
-    curseur.remove();
-    if (mien !== generation) return;   // « Nouveau » a été cliqué pendant la réponse
-
-    if (erreur) { para.textContent = erreur; fini(false); return; }
-
-    const [texte, etapes] = extrairePlan(brut, question);
-    para.textContent = texte || (etapes.length ? "Voici le plan :" : "Pas de réponse cette fois-ci.");
-    if (etapes.length) doc.append(schema(etapes));
-    if (sources.length) doc.append(blocSources(sources));
-    messages.push({ role: "assistant", content: para.textContent, etapes, sources });
-    fini(true);
-    sauverSession();
   } catch (err) {
-    fini(false);
-    doc.append(creer("p", "reponse",
-      "La connexion a été coupée avant la fin de la réponse. Réessaie."));
+    erreur = "La réponse a été coupée avant la fin. Réessaie.";
     console.error(err);
+  }
+  enlever();
+  if (mien !== generation) return;
+
+  if (erreur) {
+    messages.pop();
+    (para || doc.appendChild(creer("p", "reponse"))).textContent = erreur;
+    occupe = false;
+    doc.scrollTop = doc.scrollHeight;
+    return;
+  }
+
+  // On garde le bloc [PLAN] ici : c'est extrairePlan qui le transforme en schéma.
+  const [texte, etapes] = extrairePlan(sansReflexion(brut).trim(), question);
+  if (!para) { para = creer("p", "reponse"); doc.append(para); }
+  para.textContent = texte || (etapes.length ? "Voici le plan :" : "Pas de réponse cette fois-ci.");
+  if (etapes.length) doc.append(schema(etapes));
+  if (sources.length) doc.append(blocSources(sources));
+  messages.push({ role: "assistant", content: para.textContent, etapes, sources });
+  occupe = false;
+  doc.scrollTop = doc.scrollHeight;
+  sauverSession();
+}
+
+/* ---------- Paramètres, dans le menu ---------- */
+function majParametres() {
+  const cle = lire(CLE_CLAUDE);
+  $("#etat-cle").textContent = cle
+    ? `Clé enregistrée sur cet appareil (finit par ${cle.slice(-4)})`
+    : "Aucune clé sur cet appareil";
+  $("#etat-cle").className = "etat " + (cle ? "oui" : "non");
+  majAstuceMoteur();
+}
+
+async function majOllama() {
+  const etat = $("#etat-ollama");
+  const aide = $("#aide-ollama");
+  const installes = await construireMoteurs();
+  if (installes.length) {
+    etat.textContent = `Ollama répond ✓ — ${installes.length} modèle(s) : `
+      + installes.map((n) => n.replace(/:latest$/, "")).join(", ");
+    etat.className = "etat oui";
+    aide.hidden = true;
+  } else {
+    etat.textContent = "Ollama ne répond pas depuis ce site";
+    etat.className = "etat non";
+    aide.hidden = false;
+    $("#commande-ollama").textContent =
+      `OLLAMA_ORIGINS=${location.origin} ollama serve`;
   }
 }
 
@@ -345,11 +613,11 @@ function nouveau(refermer = true) {
 
 function sauvegarder() {
   if (!messages.length) { alert("Écris au moins une question avant de sauvegarder."); return; }
-  const contenu = messages
-    .map((m) => (m.role === "user" ? m.content : m.content +
-      (m.etapes?.length ? "\n" + m.etapes.map((e, i) => `${i + 1}. ${e}`).join("\n") : "") +
-      (m.sources?.length ? "\nSources :\n" + m.sources.map((s) => `- ${s.titre} ${s.url}`).join("\n") : "")))
-    .join("\n\n");
+  const contenu = messages.map((m) => m.role === "user" ? m.content :
+    m.content
+    + (m.etapes?.length ? "\n" + m.etapes.map((e, i) => `${i + 1}. ${e}`).join("\n") : "")
+    + (m.sources?.length ? "\nSources :\n" + m.sources.map((s) => `- ${s.titre} ${s.url}`).join("\n") : "")
+  ).join("\n\n");
   const lien = creer("a");
   lien.href = URL.createObjectURL(new Blob([contenu], { type: "text/plain;charset=utf-8" }));
   lien.download = "ecriture.txt";
@@ -357,8 +625,9 @@ function sauvegarder() {
   URL.revokeObjectURL(lien.href);
 }
 
-function basculerMenu() { menu.classList.toggle("ouvert"); if (menu.classList.contains("ouvert")) dessinerSessions(); }
+function ouvrirMenu() { menu.classList.add("ouvert"); dessinerSessions(); majParametres(); majOllama(); }
 function fermerMenu() { menu.classList.remove("ouvert"); }
+function basculerMenu() { menu.classList.contains("ouvert") ? fermerMenu() : ouvrirMenu(); }
 
 /* ---------- Branchements ---------- */
 $("#envoyer").onclick = envoyer;
@@ -366,6 +635,31 @@ $("#nouveau").onclick = () => nouveau();
 $("#nouveau-menu").onclick = () => nouveau();
 $("#sauvegarder").onclick = sauvegarder;
 $("#menu-bouton").onclick = basculerMenu;
+choixMoteur.onchange = () => { ecrire(CLE_MOTEUR, choixMoteur.value); majAstuceMoteur(); };
+
+$("#enregistrer-cle").onclick = () => {
+  const champ = $("#cle-claude");
+  const valeur = champ.value.trim();
+  if (!valeur) { $("#mot-cle").textContent = "Colle d'abord ta clé dans la case."; return; }
+  ecrire(CLE_CLAUDE, valeur);
+  champ.value = "";
+  $("#mot-cle").textContent = "C'est enregistré, et ça reste ici.";
+  majParametres();
+};
+$("#supprimer-cle").onclick = () => {
+  ecrire(CLE_CLAUDE, "");
+  $("#mot-cle").textContent = "Clé supprimée de cet appareil.";
+  majParametres();
+};
+$("#montrer-cle").onchange = (e) => {
+  $("#cle-claude").type = e.target.checked ? "text" : "password";
+};
+$("#copier-ollama").onclick = () => {
+  const commande = $("#commande-ollama").textContent;
+  navigator.clipboard?.writeText(commande);
+  $("#mot-cle").textContent = "Commande copiée.";
+};
+$("#rafraichir-ollama").onclick = majOllama;
 
 saisie.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); envoyer(); }
@@ -374,8 +668,11 @@ addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); sauvegarder(); }
   if (e.key === "Escape") fermerMenu();
 });
-doc.addEventListener("click", () => fermerMenu());
+doc.addEventListener("click", fermerMenu);
 
+/* ---------- Démarrage ---------- */
 mesurer();
 dessinerSessions();
+majParametres();
+construireMoteurs().then(majAstuceMoteur);
 saisie.focus();
