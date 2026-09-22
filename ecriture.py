@@ -118,12 +118,13 @@ FICHIER_TOKEN = DOSSIER_CONFIG / "github_token"
 FICHIER_REGLAGES = DOSSIER_CONFIG / "reglages.json"   # ta ville pour la météo
 DOSSIER_SESSIONS = Path.home() / ".local" / "share" / "ecriture" / "sessions"
 DOSSIER_IMAGES = Path.home() / ".local" / "share" / "ecriture" / "images"
+DOSSIER_PROJETS = Path.home() / ".local" / "share" / "ecriture" / "projets"
 FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'auto
 
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
@@ -131,6 +132,7 @@ NOM_CLAUDE = "Claude + web (payant)"   # nom affiché dans le menu
 STYLE_QUEBECOIS = True                 # False = l'IA parle en français standard
 DUREE_ECRITURE = 1.5                   # secondes max pour écrire une réponse à l'écran
 VITESSE_MS = 10                        # une lettre (ou un petit paquet) aux 10 ms
+DUREE_CODE = 1.2                       # secondes max pour écrire un fichier dans l'éditeur du Codex
 CONTEXTE_CLAUDE = 150_000              # caractères de code max envoyés à Claude par demande Codex
 CONTEXTE_OLLAMA = 24_000               # … et aux modèles gratuits (leur mémoire est plus petite)
 CTX_OLLAMA_CODEX = 16384               # mémoire (tokens) demandée à Ollama pour le Codex
@@ -1534,6 +1536,8 @@ class StudioImage(tk.Frame):
             self.etiquette = tk.Label(boutons, text="Après", bg=GRIS_BOITE, fg=NOIR, font=(FAMILLE, 10, "bold"))
             self.etiquette.pack(side="left", padx=10)
         bouton_orange(boutons, "Mettre dans le Codex", self.vers_codex, taille=9).pack(side="right")
+        self.bouton_projet = bouton_orange(boutons, "Garder dans le projet", self.vers_projet, taille=9)
+        self.bouton_projet.pack(side="right", padx=(0, 8))
         bouton_orange(boutons, "Enregistrer", self.enregistrer, taille=9).pack(side="right", padx=(0, 8))
         if anime:   # le Studio s'ouvre en glissant vers le bas
             self.update_idletasks()
@@ -1566,6 +1570,11 @@ class StudioImage(tk.Frame):
 
     def vers_codex(self):
         self.app.mettre_image_dans_codex(self.image_montree())
+
+    def vers_projet(self):
+        self.app.garder_image_projet(
+            self.image_montree(),
+            lambda nom: self.bouton_projet.config(text=f"Gardée dans « {nom[:18]} »"))
 
 
 # ---------- Les pouvoirs magiques : tout roule sur ton ordi, gratuitement ----------
@@ -2606,6 +2615,39 @@ class Onglet:
         self.texte.see("1.0")
         self.planifier()
 
+    def ecrire_code(self, contenu, duree=None, fini=None):
+        """Écrit le code en direct dans l'éditeur, vite pis fluide, avec les couleurs qui suivent."""
+        self.texte.edit_separator()
+        self.texte.delete("1.0", "end")
+        tours = max(1, int((duree or DUREE_CODE) * 1000 / VITESSE_MS))
+        paquet = max(1, -(-len(contenu) // tours))
+        etat = {"position": 0, "tic": 0}
+
+        def tour():
+            try:
+                if not self.texte.winfo_exists():
+                    return
+                morceau = contenu[etat["position"]:etat["position"] + paquet]
+                if morceau:
+                    self.texte.insert("end", morceau)
+                    etat["position"] += paquet
+                    etat["tic"] += 1
+                    self.texte.see("end")
+                    if etat["tic"] % 8 == 0:
+                        self.rafraichir()   # les couleurs suivent pendant que ça s'écrit
+                    self.texte.after(VITESSE_MS, tour)
+                else:
+                    self.texte.edit_separator()
+                    self.texte.mark_set("insert", "1.0")
+                    self.texte.see("1.0")
+                    self.rafraichir()
+                    if fini:
+                        fini()
+            except tk.TclError:
+                return   # l'onglet a été fermé pendant l'écriture
+
+        tour()
+
     def set_modifie(self, valeur):
         if valeur != self.modifie:
             self.modifie = valeur
@@ -3489,12 +3531,17 @@ class CodexVue(tk.Frame):
             self.onglets.remove(o)
             o.cadre.destroy()
             o = None
-        if o:
+        # L'éditeur ouvert : on voit le code s'écrire. Fermé : instantané, ça sert à rien d'attendre.
+        visible = self.editeur_visible()
+        if o is None:
+            o = self.creer_onglet(chemin, "" if visible else contenu,
+                                  self.arbre.get(chemin, {}).get("sha"))
+        elif not visible:
             o.remplacer(contenu)
-        else:
-            o = self.creer_onglet(chemin, contenu, self.arbre.get(chemin, {}).get("sha"))
         o.set_modifie(True)
         self.activer(o, montrer=False)
+        if visible:
+            o.ecrire_code(contenu)
         return chemin
 
     # ----- Les images -----
@@ -5063,6 +5110,30 @@ class AppEcriture(tk.Tk):
             initialvalue=f"images/studio-{datetime.datetime.now():%Y%m%d-%H%M%S}.png", parent=self)
         if chemin and chemin.strip():
             self.codex.ajouter_image(chemin.strip().lstrip("/"), image, montrer=True)
+
+    def garder_image_projet(self, image, rappel=None):
+        """« Garder dans le projet » : range l'image dans un dossier de projet, sur ton ordi."""
+        reglages = lire_reglages()
+        nom = simpledialog.askstring(
+            "Garder dans le projet", "Nom du projet (c'est un dossier sur ton ordi) :",
+            initialvalue=reglages.get("projet", "Mon projet"), parent=self)
+        if not nom or not nom.strip():
+            return
+        nom = nom.strip()
+        dossier = DOSSIER_PROJETS / (re.sub(r'[<>:"/\\|?*]', "-", nom)[:60] or "projet")
+        try:
+            dossier.mkdir(parents=True, exist_ok=True)
+            # microsecondes : deux images gardées dans la même seconde s'écraseraient
+            fichier = dossier / f"image-{datetime.datetime.now():%Y%m%d-%H%M%S-%f}.png"
+            fichier.write_bytes(octets_pour(fichier.name, image))
+        except OSError as e:
+            messagebox.showerror("Garder dans le projet", f"Ça n'a pas marché : {e}", parent=self)
+            return
+        reglages["projet"] = nom
+        enregistrer_reglages(reglages)
+        self.dire_magie(f"Image gardée dans « {nom} » : {fichier}")
+        if rappel:
+            rappel(nom)
 
     # ---------- Le Studio ----------
     def ajouter_studio(self, operations, reponse):

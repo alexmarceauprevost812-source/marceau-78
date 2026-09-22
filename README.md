@@ -455,10 +455,23 @@ ou en pourcentage (`contraste +35`, `luminosite -20 %`) se lit comme un écart,
 pas comme un facteur. Une opération qu'on ne comprend pas est sautée sans
 empêcher les autres.
 
+**Garder dans le projet** range l'image sur ton ordi, dans
+`~/.local/share/ecriture/projets/<nom>/`. Le nom du dernier projet est
+proposé la fois d'après, pour empiler plusieurs images au même endroit.
+
 Le résultat s'affiche dans une carte **Studio** qui s'ouvre en glissant :
 l'image, la liste de ce qui a été fait, un bouton **Voir l'avant / Voir
 l'après**, **Enregistrer** (sur l'ordi) et **Mettre dans le Codex**. Chaque
 modification part de l'image précédente : on peut enchaîner les demandes.
+
+### Le code qui s'écrit en direct
+
+Quand l'éditeur est **ouvert**, le fichier écrit par l'assistant s'écrit
+sous tes yeux, lettre par lettre, avec les couleurs qui suivent —
+`DUREE_CODE` secondes au plus, quelle que soit la longueur. Quand il est
+**fermé**, le code arrive d'un coup : ça sert à rien d'attendre pour
+quelque chose qu'on ne voit pas. Un seul Ctrl+Z ramène l'ancien contenu
+dans les deux cas.
 
 ### Les images dans le Codex
 
