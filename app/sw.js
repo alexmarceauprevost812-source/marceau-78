@@ -5,7 +5,7 @@
 // l'app. Comme ça, dès que tu es en ligne, tu as la dernière version — pas
 // besoin d'attendre qu'un cache expire. Le cache sert juste de filet quand la
 // connexion n'est pas là.
-const VERSION = "1.5.0";
+const VERSION = "1.6.0";
 const CACHE = `ecriture-${VERSION}`;
 
 // Ce qu'on garde d'avance pour que l'app démarre même hors ligne.

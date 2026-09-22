@@ -243,6 +243,14 @@ par-dessus l'écran, avec la coloration et les onglets; **‹ Retour** te ramèn
 **Fichiers** ouvre la liste du projet dans une fenêtre, si tu veux aller voir
 un fichier toi-même. **Enregistrer (N)** dit combien attendent d'être envoyés.
 
+### Pendant que ça travaille
+
+Trois points sautent en vague à côté du texte, en passant du rouge au jaune au
+vert. Le texte change au fil du travail — « Codex cherche les bons fichiers »,
+« Codex lit 3 fichier(s) : app.py, README.md », « Codex écrit le code » — sans
+que les points arrêtent de sauter. Les mêmes points servent dans le chat et
+pendant que la météo se charge.
+
 ### Le Codex web
 
 Le même Codex existe dans `/app`, et il est **agentique** : au lieu de répondre

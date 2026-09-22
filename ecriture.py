@@ -119,7 +119,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
@@ -1090,7 +1090,7 @@ def agent_codex(question, historique, onglets, cache, arbre, depot, branche, tok
         if sum(arbre[c]["taille"] for c in textes) <= budget * 0.7 and len(textes) <= 60:
             choisis = sorted(textes)   # petit projet : Codex lit tout
         else:
-            progres("Codex cherche les bons fichiers…")
+            progres("Codex cherche les bons fichiers")
             reponse = ia([{"role": "user", "content": demande_selection(question, historique, arbre, ouverts)}],
                          instructions_selection(), 800)
             choisis = associer_chemins(extraire_lire(reponse, strict=False), arbre)[:10]
@@ -1104,7 +1104,7 @@ def agent_codex(question, historique, onglets, cache, arbre, depot, branche, tok
         contexte, vus = contexte_codex(depot, branche, arbre, fichiers, budget)
         envoi = [dict(m) for m in historique]
         envoi[-1]["content"] = contexte + "\n\nDemande : " + question
-        progres("Codex écrit le code…")
+        progres("Codex écrit le code")
         texte = ia(envoi, instructions_codex(), 16000)
         # L'IA peut demander d'autres fichiers avant d'écrire : on les lit pis on recommence une fois
         nouveaux = [c for c in associer_chemins(extraire_lire(texte), arbre) if c not in choisis] if depot else []
@@ -1466,6 +1466,65 @@ class IAGratuites(tk.Toplevel):
     def fermer(self):
         self.app.fenetre_ia = None
         self.destroy()
+
+
+# ---------- Les 3 points d'attente : ils sautent pis passent du rouge au jaune au vert ----------
+class PointsAttente(tk.Canvas):
+    ROUGE, JAUNE, VERT = (255, 59, 48), (255, 214, 10), (60, 220, 60)
+    PAS_MS = 30
+
+    def __init__(self, parent, taille=16, fond=GRIS_ZONE):
+        self.r = max(3, round(taille / 3.0))            # rayon des points
+        espace = self.r * 3.2
+        hauteur = int(taille * 1.7)
+        super().__init__(parent, width=int(espace * 2 + self.r * 2 + 8), height=hauteur,
+                         bg=fond, highlightthickness=0, bd=0)
+        self.x = [4 + self.r + i * espace for i in range(3)]
+        self.bas = hauteur - self.r - 3                  # où les points se posent
+        self.saut = hauteur - 2 * self.r - 6             # hauteur du saut
+        self.points = [self.create_oval(0, 0, 0, 0, outline="#3a3a3a", width=1) for _ in range(3)]
+        self.t = 0.0
+        self.animer()
+
+    def couleur(self, p):
+        """p = 0 : rouge, 0.5 : jaune, 1 : vert (avec toutes les couleurs entre les deux)."""
+        a, b, k = (self.ROUGE, self.JAUNE, p / 0.5) if p < 0.5 else (self.JAUNE, self.VERT, (p - 0.5) / 0.5)
+        return "#%02x%02x%02x" % tuple(round(a[i] + (b[i] - a[i]) * k) for i in range(3))
+
+    def animer(self):
+        try:
+            if not self.winfo_exists():
+                return
+            self.t += 0.06
+            for i, point in enumerate(self.points):
+                bond = max(0.0, math.sin(self.t * 2.4 - i * 0.8)) ** 1.5   # chacun son tour, comme une vague
+                y = self.bas - self.saut * bond
+                self.coords(point, self.x[i] - self.r, y - self.r, self.x[i] + self.r, y + self.r)
+                self.itemconfig(point, fill=self.couleur((math.sin(self.t * 1.1 - i * 0.6) + 1) / 2))
+            self.after(self.PAS_MS, self.animer)
+        except tk.TclError:
+            return   # les points ont été effacés
+
+
+def ajouter_ligne_attente(widget, texte, taille, etiquettes):
+    """Ajoute « texte ● ● ● » (points animés) à la fin. Retourne les points pour les effacer après."""
+    widget.insert("end", texte + " ", etiquettes + ("attente_texte",))
+    points = PointsAttente(widget, taille)
+    index = widget.index("end-1c")
+    widget.window_create(index, window=points, align="center")
+    for etiquette in etiquettes:
+        widget.tag_add(etiquette, index)
+    widget.insert("end", "\n", etiquettes)
+    widget.see("end")
+    return points
+
+
+def enlever_ligne_attente(widget, etiquette, points):
+    zone = widget.tag_ranges(etiquette)
+    if zone:
+        widget.delete(zone[0], zone[-1])
+    if points is not None:
+        points.destroy()
 
 
 # ---------- Le logo de l'agent ----------
@@ -2316,10 +2375,11 @@ class CodexVue(tk.Frame):
 
     # ----- L'assistant Codex -----
     def maj_attente(self, message):
-        zone = self.chat.tag_ranges("attente")
+        """Change le texte à côté des points, sans arrêter leur saut."""
+        zone = self.chat.tag_ranges("attente_texte")
         if zone:
             self.chat.delete(zone[0], zone[1])
-            self.chat.insert(zone[0], message + "\n", "attente")
+            self.chat.insert(zone[0], message + " ", ("attente", "attente_codex", "attente_texte"))
             self.chat.see("end")
 
     def envoyer(self, event=None):
@@ -2353,8 +2413,8 @@ class CodexVue(tk.Frame):
         onglets = [(o.chemin, o.contenu()) for o in ordre]
         depot, branche, token = self.depot, self.branche, self.token
         arbre, cache = dict(self.arbre), dict(self.cache)
-        self.chat.insert("end", f"Codex ({nom_court(moteur)}) regarde ton projet…\n", "attente")
-        self.chat.see("end")
+        self.points = ajouter_ligne_attente(self.chat, f"Codex ({nom_court(moteur)}) regarde ton projet",
+                                            14, ("attente", "attente_codex"))
         self.occupe = True
 
         def ia(messages, systeme, max_tokens):
@@ -2373,9 +2433,8 @@ class CodexVue(tk.Frame):
         return "break"
 
     def reponse(self, resultat, err, type_moteur, modele, depot):
-        zone = self.chat.tag_ranges("attente")
-        if zone:
-            self.chat.delete(zone[0], zone[1])
+        enlever_ligne_attente(self.chat, "attente_codex", getattr(self, "points", None))
+        self.points = None
         if err:
             self.messages.pop()
             message = erreur_github(err) if "github" in str(getattr(err, "url", "")) else \
@@ -2472,9 +2531,8 @@ class AppEcriture(tk.Tk):
         self.resultats = queue.Queue()
         self.taches = queue.Queue()  # travaux finis en arrière-plan (Codex, GitHub)
         self._anims = {}
-        self.compteur = 0
         self.nb_liens = 0
-        self.texte_attente = ""
+        self.points_ia = None        # les 3 points animés pendant que l'IA réfléchit
         self.schemas = []
         self.question_en_cours = ""
         self.menu_ouvert = False
@@ -3217,6 +3275,9 @@ class AppEcriture(tk.Tk):
         for schema in self.schemas:
             schema.destroy()
         self.schemas = []
+        if self.points_ia is not None:
+            self.points_ia.destroy()
+            self.points_ia = None
         self.document.delete("1.0", "end")
         self.title("Écriture")
         if self.logo:
@@ -3341,7 +3402,6 @@ class AppEcriture(tk.Tk):
             generation, statut, texte, sources = self.resultats.get_nowait()
         except queue.Empty:
             if self.occupe:
-                self.animer_attente()
                 self.after(100, self.verifier_resultat)
             return
 
@@ -3351,9 +3411,8 @@ class AppEcriture(tk.Tk):
                 self.after(100, self.verifier_resultat)
             return
 
-        zone = self.document.tag_ranges("attente")
-        if zone:
-            self.document.delete(zone[0], zone[1])
+        enlever_ligne_attente(self.document, "attente_ia", self.points_ia)
+        self.points_ia = None
         continuer = lambda: generation == self.generation
 
         if statut == "ok":
@@ -3418,15 +3477,15 @@ class AppEcriture(tk.Tk):
         marque, etiquette = f"meteo{self.nb_meteo}", f"attente_meteo{self.nb_meteo}"
         self.document.mark_set(marque, "end-1c")
         self.document.mark_gravity(marque, "left")
-        self.document.insert("end", "Je regarde la météo…\n", ("attente", etiquette))
+        points = ajouter_ligne_attente(self.document, "Je regarde la météo", TAILLE_AGENT,
+                                       ("attente", etiquette))
         generation, ville = self.generation, lire_reglages().get("ville", "")
 
         def fini(meteo, err):
             if generation != self.generation:
+                points.destroy()
                 return   # on a changé de conversation entre-temps
-            zone = self.document.tag_ranges(etiquette)
-            if zone:
-                self.document.delete(zone[0], zone[1])
+            enlever_ligne_attente(self.document, etiquette, points)
             if err:
                 self.document.insert(marque, message_meteo(err, lieu or ville) + "\n", "reponse")
                 return
@@ -3440,22 +3499,11 @@ class AppEcriture(tk.Tk):
         self.en_arriere_plan(lambda: obtenir_meteo(lieu, ville), fini)
 
     def montrer_attente(self, nom):
-        self.compteur = 0
         index = self.avatar()
         if index:
             self.logo.suivre(index)   # le gros logo vient se placer à côté de la réponse
-        self.texte_attente = f"{nom} réfléchit"
-        self.document.insert("end", self.texte_attente + "\n", "attente")
-
-    def animer_attente(self):
-        self.compteur += 1
-        if self.compteur % 4:
-            return
-        points = "." * ((self.compteur // 4) % 4)
-        zone = self.document.tag_ranges("attente")
-        if zone:
-            self.document.delete(zone[0], zone[1])
-            self.document.insert(zone[0], f"{self.texte_attente}{points}\n", "attente")
+        self.points_ia = ajouter_ligne_attente(self.document, f"{nom} réfléchit", TAILLE_AGENT,
+                                               ("attente", "attente_ia"))
 
     def saut_de_ligne(self, event=None):
         self.saisie.insert("insert", "\n")
