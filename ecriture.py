@@ -57,14 +57,27 @@ URL_OLLAMA = "http://localhost:11434"
 FICHIER_CLE = Path.home() / ".config" / "ecriture" / "cle_api"
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
 NOM_CLAUDE = "Claude + web (payant)"   # nom affiché dans le menu
+STYLE_QUEBECOIS = True                 # False = l'IA parle en français standard
+DUREE_ECRITURE = 1.5                   # secondes max pour écrire une réponse à l'écran
+VITESSE_MS = 10                        # une lettre (ou un petit paquet) aux 10 ms
+
+QUEBECOIS = (
+    "Tu es un vrai Québécois. Tu parles pis tu écris en français québécois familier, "
+    "comme quelqu'un d'ici qui jase avec un chum : tu tutoies, tu utilises les tournures "
+    "orales (y'a, j'suis, t'sais, c'est-tu, faque, pis, ben, là, pantoute, tantôt, astheure) "
+    "et les expressions d'ici quand ça sonne naturel (c'est l'fun, ça a pas d'allure, "
+    "lâche pas, c'est correct, mets-en). Garde ça clair et facile à lire, sans en beurrer "
+    "trop épais : pas de caricature, pas de sacres à moins que la personne en utilise. "
+    "Les termes techniques, les commandes et le code restent exacts et bien écrits. "
+)
 
 
 def instructions_systeme(web):
     aujourdhui = datetime.date.today().isoformat()
     texte = (
         "Tu es l'assistant intégré à une application d'écriture. "
-        "Réponds en français, de façon claire et directe. "
-        "Écris seulement en texte brut : pas de Markdown, pas d'astérisques, "
+        + (QUEBECOIS if STYLE_QUEBECOIS else "Réponds en français, de façon claire et directe. ")
+        + "Écris seulement en texte brut : pas de Markdown, pas d'astérisques, "
         "pas de dièses, pas de tableaux. Pour une liste, utilise des tirets simples. "
     )
     if web:
@@ -471,7 +484,6 @@ class AppEcriture(tk.Tk):
         self.texte_attente = ""
         self.schemas = []            # schémas animés dans la conversation
         self.question_en_cours = ""
-        self.index_question = "1.0"
 
         # --- Boutons du haut (cachés au début) ---
         self.barre = tk.Frame(self, bg=GRIS_FOND)
@@ -487,6 +499,7 @@ class AppEcriture(tk.Tk):
         self.document.tag_configure("attente", font=(FAMILLE, 14, "italic"), spacing1=6)
         self.document.tag_configure("sources", font=(FAMILLE, 11), spacing1=2)
         self.document.tag_configure("lien", underline=True)
+        self.document.tag_configure("curseur", foreground=ORANGE)
         self.document.tag_bind("lien", "<Enter>", lambda e: self.document.config(cursor="hand2"))
         self.document.tag_bind("lien", "<Leave>", lambda e: self.document.config(cursor="xterm"))
 
@@ -641,7 +654,6 @@ class AppEcriture(tk.Tk):
                 return "break"
 
         self.saisie.delete("1.0", "end")
-        self.index_question = self.document.index("end-1c")
         self.document.insert("end", texte + "\n", "question")
         self.historique.append({"role": "user", "content": texte})
         self.question_en_cours = texte
@@ -686,7 +698,6 @@ class AppEcriture(tk.Tk):
                 self.after(100, self.verifier_resultat)
             return
 
-        self.occupe = False
         zone = self.document.tag_ranges("attente")
         if zone:
             self.document.delete(zone[0], zone[1])
@@ -696,27 +707,65 @@ class AppEcriture(tk.Tk):
             texte = texte or ("Voici le plan :" if etapes else
                               "Pas de réponse cette fois-ci. Reformule ta question.")
             self.historique.append({"role": "assistant", "content": texte})
-            self.document.insert("end", texte + "\n", "reponse")
-            if etapes:
-                largeur = max(self.document.winfo_width() - 40, 360)
-                schema = SchemaAnime(self.document, etapes, largeur)
-                self.schemas.append(schema)
-                self.document.window_create("end", window=schema, pady=8)
-                self.document.insert("end", "\n")
-            if sources:
-                self.document.insert("end", "Sources :\n", "sources")
-                for titre, url in sources[:5]:
-                    etiquette = f"lien{self.nb_liens}"
-                    self.nb_liens += 1
-                    self.document.insert("end", "- ", "sources")
-                    self.document.insert("end", titre + "\n", ("sources", "lien", etiquette))
-                    self.document.tag_bind(etiquette, "<Button-1>",
-                                           lambda e, u=url: webbrowser.open(u))
+            # Le schéma et les sources arrivent une fois le texte fini d'écrire
+            self.ecrire(texte, generation,
+                        lambda: self.ajouter_schema_et_sources(etapes, sources))
         else:
             self.historique.pop()  # la question a pas eu de réponse, on la retire
-            self.document.insert("end", texte + "\n", "reponse")
+            self.ecrire(texte, generation, self.fin_reponse)
+
+    # ---------- Effet d'écriture ----------
+    def ecrire(self, texte, generation, suite):
+        """Écrit la réponse lettre par lettre, vite pis fluide, avec un curseur orange."""
+        self.document.insert("end", "▌", "curseur")
+        tours = max(1, int(DUREE_ECRITURE * 1000 / VITESSE_MS))
+        paquet = max(1, -(-len(texte) // tours))   # plus la réponse est longue, plus ça va vite
+        position = 0
+
+        def tour():
+            nonlocal position
+            if generation != self.generation:
+                return   # « Nouveau » a été cliqué pendant l'écriture
+            curseur = self.document.tag_ranges("curseur")
+            if not curseur:
+                return
+            if position < len(texte):
+                self.document.insert(curseur[0], texte[position:position + paquet], "reponse")
+                position += paquet
+                self.document.see("end")
+                self.after(VITESSE_MS, tour)
+            else:
+                self.document.delete(curseur[0], curseur[1])
+                self.document.insert("end", "\n", "reponse")
+                suite()
+
+        tour()
+
+    def ajouter_schema_et_sources(self, etapes, sources):
+        index_schema = None
+        if etapes:
+            largeur = max(self.document.winfo_width() - 40, 360)
+            schema = SchemaAnime(self.document, etapes, largeur)
+            self.schemas.append(schema)
+            index_schema = self.document.index("end-1c")
+            self.document.window_create("end", window=schema, pady=8)
+            self.document.insert("end", "\n")
+        if sources:
+            self.document.insert("end", "Sources :\n", "sources")
+            for titre, url in sources[:5]:
+                etiquette = f"lien{self.nb_liens}"
+                self.nb_liens += 1
+                self.document.insert("end", "- ", "sources")
+                self.document.insert("end", titre + "\n", ("sources", "lien", etiquette))
+                self.document.tag_bind(etiquette, "<Button-1>",
+                                       lambda e, u=url: webbrowser.open(u))
+        self.fin_reponse(index_schema)
+
+    def fin_reponse(self, index_a_montrer=None):
+        self.occupe = False
         self.document.see("end")
-        self.document.see(self.index_question)
+        if index_a_montrer:
+            self.document.see(index_a_montrer)   # montre le haut du schéma
 
     def montrer_attente(self, nom):
         self.compteur = 0

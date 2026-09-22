@@ -92,6 +92,11 @@ navigateur.
 L'assistant garde le fil de la conversation, quel que soit le moteur — on peut
 commencer avec un modèle local et passer à Claude en cours de route.
 
+La réponse s'écrit à l'écran lettre par lettre, derrière un curseur orange,
+en une seconde et demie quelle que soit sa longueur : plus c'est long, plus les
+lettres arrivent par paquets. Par défaut l'assistant répond en français
+québécois familier.
+
 Pendant qu'une réponse arrive, « … réfléchit » s'anime et la saisie est mise en
 pause. L'appel tourne dans un fil séparé pour que la fenêtre reste réactive.
 **Nouveau** efface la conversation, ramène le logo et la saisie au centre, et
@@ -135,6 +140,9 @@ Puis les réglages des IA :
 - `MODELE_CLAUDE`, `URL_CLAUDE`, `URL_OLLAMA`, `FICHIER_CLE`
 - `RECHERCHES_MAX` — recherches web maximum par question
 - `NOM_CLAUDE` — le nom affiché dans le menu
+- `STYLE_QUEBECOIS` — `False` pour du français standard
+- `DUREE_ECRITURE`, `VITESSE_MS` — l'effet machine à écrire (mettre
+  `DUREE_ECRITURE = 0` affiche la réponse d'un coup)
 - `instructions_systeme()` — le ton et les consignes données à l'assistant
 
 ### Les coins ronds
