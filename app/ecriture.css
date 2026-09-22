@@ -268,7 +268,7 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .modeles .bouton { padding: 4px 9px; font-size: .72rem; border-radius: 8px; flex: 0 0 auto; }
 .modeles li.installe { background: var(--orange); }
 
-/* ---------- Le Codex ---------- */
+/* ---------- Le Codex : un seul écran, centré ---------- */
 .codex {
   position: absolute; inset: 0; z-index: 15;
   display: none; flex-direction: column;
@@ -282,6 +282,7 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   display: flex; align-items: center; gap: 10px;
   padding: 12px 14px 12px 72px;      /* la place du bouton ☰ */
   border-bottom: 2px solid #5e5e5e;
+  flex: 0 0 auto;
 }
 .codex-nom { font-size: .9rem; white-space: nowrap; }
 .codex-etat { flex: 1; font-size: .8rem; opacity: .8; min-width: 0;
@@ -291,37 +292,96 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .codex-barre .fermer { position: static; font-size: 1.5rem; }
 .codex-coche { margin: 0; font-size: .78rem; white-space: nowrap; cursor: pointer; }
 
-.codex-corps { flex: 1; display: flex; min-height: 0; }
-
-.codex-fichiers {
-  width: 250px; flex: 0 0 250px; display: flex; flex-direction: column;
-  border-right: 2px solid #5e5e5e; padding: 10px; gap: 8px; min-height: 0;
+/* La conversation : une seule colonne, au milieu de l'écran */
+.codex-conversation {
+  flex: 1; min-height: 0; overflow-y: auto;
+  width: var(--largeur); margin: 0 auto;
+  padding: 16px 0 8px;
+  font-size: .95rem;
 }
-.codex-arbre { flex: 1; overflow: auto; margin: 0 -4px; }
-.codex-fichier {
-  display: block; width: 100%; text-align: left;
-  border: 0; background: none; cursor: pointer;
-  font-size: .78rem; font-family: ui-monospace, Menlo, Consolas, monospace;
-  padding: 4px 8px; border-radius: 7px;
+.codex-question { font-weight: 700; margin: 14px 0 4px; }
+.codex-question:first-child { margin-top: 0; }
+.codex-reponse { white-space: pre-wrap; margin: 0 0 10px; line-height: 1.55; }
+
+/* La boîte où tu écris, en bas au centre */
+.codex-bas { flex: 0 0 auto; width: var(--largeur); margin: 0 auto; padding: 0 0 14px; }
+.codex-rangee { display: flex; align-items: stretch; gap: 10px; }
+.codex-rangee .boite { flex: 1; min-width: 0; }
+.codex-rangee .bouton { padding-left: 22px; padding-right: 22px; border-radius: var(--r-zone); }
+.codex-options { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.codex-options .moteur { max-width: 70%; }
+
+/* Ce que l'agent est en train de faire, geste par geste */
+.codex-travaux:not(:empty) {
+  background: #8a8a8a; border-radius: 10px; padding: 8px 12px; margin: 4px 0 10px;
+}
+.codex-geste {
+  font-size: .78rem; line-height: 1.6;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  direction: rtl;                    /* on coupe le début du chemin, pas le nom du fichier */
 }
-.codex-fichier::before { content: "\200E"; }   /* remet le texte à l'endroit */
-.codex-fichier:hover { background: #8a8a8a; }
-.codex-fichier.actif { background: var(--orange); font-weight: 700; }
+.codex-geste.mal { color: #5a1d00; font-weight: 700; white-space: normal; }
+.codex-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
 
-.codex-centre { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.codex-onglets {
-  display: flex; gap: 4px; padding: 8px 10px 0; overflow-x: auto; min-height: 42px;
+/* ---------- Les cartes de fichiers, avec ce qui a changé ---------- */
+.carte {
+  background: #3a3a3a; border: 1px solid #5e5e5e; border-radius: 10px;
+  margin: 8px 0; overflow: hidden;
 }
+.carte-barre {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; cursor: pointer; min-height: 40px;
+}
+.carte-barre:hover { background: #454545; }
+.carte-fleche { color: var(--orange); font-weight: 700; font-size: .95rem; flex: 0 0 auto; }
+.carte-nom {
+  color: #f0f0f0; font-weight: 700; font-size: .84rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.carte-neuf { color: #a6ff4d; font-size: .74rem; font-weight: 700; white-space: nowrap; }
+.carte-plus, .carte-moins {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: .82rem; font-weight: 700; white-space: nowrap;
+}
+.carte-plus { color: #a6ff4d; }
+.carte-moins { color: #ff8a80; }
+.carte-vide { flex: 1; }
+.carte-barre .bouton { flex: 0 0 auto; }
+.carte-code {
+  display: none; max-height: 460px; overflow: auto;
+  background: #262626; border-top: 1px solid #5e5e5e;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: .76rem; line-height: 1.55;
+}
+.carte.ouverte .carte-code { display: block; }
+.carte-ligne { display: flex; white-space: pre; }
+.carte-num {
+  flex: 0 0 auto; width: 3.4em; text-align: right; padding-right: .7em;
+  color: #6c6c6c; user-select: none;
+}
+.carte-signe { flex: 0 0 auto; width: 1.2em; }
+.carte-texte { flex: 1; padding-right: 10px; }
+.carte-ligne.ajout { background: #1d3312; color: #a6ff4d; }
+.carte-ligne.retrait { background: #3a1b18; color: #ff8a80; }
+.carte-ligne.pareil { color: #9aa0a6; }
+.carte-ligne.saut { color: #6c6c6c; font-style: italic; padding-left: 3.4em; }
+
+/* ---------- L'éditeur : par-dessus l'écran ---------- */
+.codex-editeur {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; flex-direction: column; background: #262626;
+}
+.codex-editeur .codex-barre { background: var(--gris-fond); padding-left: 72px; }
+.codex-onglets { display: flex; gap: 4px; overflow-x: auto; flex: 1; min-width: 0; }
 .codex-onglet {
   display: flex; align-items: center; gap: 2px;
-  background: #9a9a9a; border-radius: 9px 9px 0 0; padding: 0 4px 0 2px;
+  background: #9a9a9a; border-radius: 9px; padding: 0 4px 0 2px; flex: 0 0 auto;
 }
 .codex-onglet.actif { background: var(--orange); }
 .codex-onglet .titre {
   border: 0; background: none; cursor: pointer; font-size: .8rem; font-weight: 700;
-  padding: 7px 8px; max-width: 190px;
+  padding: 6px 8px; max-width: 170px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .codex-onglet .x {
@@ -330,7 +390,7 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 }
 .codex-onglet .x:hover { opacity: 1; background: #ffffff55; }
 .codex-code {
-  flex: 1; margin: 0 10px 10px; padding: 12px 14px;
+  flex: 1; margin: 10px; padding: 12px 14px;
   background: var(--gris-zone); color: var(--noir);
   border: 2px solid var(--gris-bord); border-radius: var(--r-zone);
   font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .82rem; line-height: 1.55;
@@ -339,41 +399,15 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .codex-code:focus { outline: 0; border-color: var(--orange); }
 .codex-code:disabled { opacity: .5; }
 
-.codex-assistant {
-  width: 330px; flex: 0 0 330px; display: flex; flex-direction: column;
-  border-left: 2px solid #5e5e5e; padding: 10px 12px 12px; min-height: 0;
-}
-.codex-assistant h3 { margin: 2px 0 8px; font-size: .92rem; }
-.codex-chat { flex: 1; overflow-y: auto; margin: 0 -4px; padding: 0 4px; font-size: .85rem; }
-.codex-question { font-weight: 700; margin: 12px 0 4px; }
-.codex-question:first-child { margin-top: 0; }
-.codex-reponse { white-space: pre-wrap; margin: 0 0 8px; line-height: 1.5; }
-.codex-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
-
-/* Ce que l'agent est en train de faire, geste par geste. */
-.codex-travaux:not(:empty) {
-  background: #8a8a8a; border-radius: 10px; padding: 7px 10px; margin: 4px 0 8px;
-}
-.codex-geste {
-  font-size: .76rem; line-height: 1.55;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.codex-geste.mal { color: #5a1d00; font-weight: 700; white-space: normal; }
-.codex-bas { padding-top: 8px; }
-.codex-bas .boite { width: 100%; font-size: .82rem; border-radius: 12px; }
-.codex-rang { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.codex-rang .moteur { flex: 1; min-width: 0; max-width: none; }
-
-/* La liste de tes projets */
+/* ---------- Les fenêtres (projets, fichiers) ---------- */
 .codex-choix {
-  position: absolute; inset: 0; z-index: 10;
+  position: absolute; inset: 0; z-index: 25;
   background: #00000066; display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .codex-choix .dedans {
   position: relative; background: var(--gris-menu);
   border: 2px solid #5e5e5e; border-radius: var(--r-zone);
-  padding: 22px; width: 100%; max-width: 480px; max-height: 76vh;
+  padding: 22px; width: 100%; max-width: 520px; max-height: 76vh;
   display: flex; flex-direction: column; gap: 10px;
 }
 .codex-choix h3 { margin: 0; font-size: 1.05rem; }
@@ -386,6 +420,16 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .codex-projet-ligne .nom { font-weight: 700; font-size: .88rem; flex: 1;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .codex-projet-ligne .det { font-size: .74rem; opacity: .75; white-space: nowrap; }
+.codex-arbre { overflow-y: auto; margin: 0 -4px; }
+.codex-fichier {
+  display: block; width: 100%; text-align: left;
+  border: 0; background: none; cursor: pointer;
+  font-size: .78rem; font-family: ui-monospace, Menlo, Consolas, monospace;
+  padding: 5px 8px; border-radius: 7px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.codex-fichier:hover { background: #8a8a8a; }
+.codex-fichier.actif { background: var(--orange); font-weight: 700; }
 
 .fermer {
   position: absolute; top: 10px; right: 12px;
@@ -394,18 +438,13 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 }
 .fermer:hover { opacity: 1; background: #ffffff40; }
 
-@media (max-width: 900px) {
-  .codex-fichiers { flex: 0 0 180px; width: 180px; }
-  .codex-assistant { flex: 0 0 260px; width: 260px; }
-}
 @media (max-width: 720px) {
-  .codex-corps { flex-direction: column; }
-  .codex-fichiers, .codex-assistant {
-    width: auto; flex: 0 0 auto; max-height: 34vh;
-    border: 0; border-bottom: 2px solid #5e5e5e;
-  }
-  .codex-assistant { border-bottom: 0; border-top: 2px solid #5e5e5e; }
-  .codex-barre { padding-left: 68px; flex-wrap: wrap; }
+  .codex-conversation, .codex-bas { width: 92%; }
+  /* Le × sort du flux : sinon il se retrouve tout seul sur sa propre rangée. */
+  .codex-barre { padding: 10px 50px 10px 66px; flex-wrap: wrap; gap: 8px; row-gap: 6px; }
+  .codex-barre .fermer { position: absolute; top: 6px; right: 8px; }
+  .codex-etat { order: 10; flex-basis: 100%; }
+  .codex-nom { font-size: .8rem; }
 }
 
 /* ---------- L'annonce de mise à jour ---------- */

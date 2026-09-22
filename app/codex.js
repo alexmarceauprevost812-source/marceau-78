@@ -19,6 +19,7 @@ let onglets = [];                  // [{chemin, contenu, origine, sha}]
 let actif = null;
 let jase = [];                     // la conversation avec l'assistant
 let occupe = false;
+let touches = new Map();   // chemin -> {avant, apres, nouveau} pour les cartes
 
 /* ---------- Parler à GitHub ---------- */
 async function github(methode, chemin, corps) {
@@ -69,6 +70,116 @@ function versBase64(texte) {
   for (const o of octets) binaire += String.fromCharCode(o);
   return btoa(binaire);
 }
+
+/* ---------- Voir ce qui a changé dans un fichier ---------- */
+const LIGNES_DIFF_MAX = 4000;   // au-delà, on montre le fichier au complet sans comparer
+
+/** La plus longue suite de lignes communes, par programmation dynamique. */
+function communes(a, b) {
+  const table = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1
+                                  : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+  const paires = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { paires.push([i, j]); i++; j++; }
+    else if (table[i + 1][j] >= table[i][j + 1]) i++;
+    else j++;
+  }
+  return paires;
+}
+
+/**
+ * Compare deux versions d'un fichier, ligne par ligne.
+ * Retourne { lignes, ajouts, retraits }. Chaque ligne est {sorte, numero, texte} où
+ * sorte vaut "ajout", "retrait", "pareil" ou "saut". Les longs bouts pareils se replient.
+ */
+function calculerDiff(avant, apres, contexte = 3) {
+  const a = (avant || "").split("\n");
+  const b = (apres || "").split("\n");
+  if (a.length && a[a.length - 1] === "") a.pop();
+  if (b.length && b[b.length - 1] === "") b.pop();
+
+  // Fichier neuf, ou trop gros pour comparer : tout en ajout
+  if (!avant || a.length + b.length > LIGNES_DIFF_MAX) {
+    return { lignes: b.map((t, k) => ({ sorte: "ajout", numero: k + 1, texte: t })),
+             ajouts: b.length, retraits: avant ? a.length : 0 };
+  }
+
+  const paires = communes(a, b);
+  const brut = [];
+  let i = 0, j = 0, p = 0;
+  while (p <= paires.length) {
+    const [ia, jb] = p < paires.length ? paires[p] : [a.length, b.length];
+    while (i < ia) brut.push({ sorte: "retrait", numero: 0, texte: a[i++] });
+    while (j < jb) { brut.push({ sorte: "ajout", numero: j + 1, texte: b[j] }); j++; }
+    if (p < paires.length) { brut.push({ sorte: "pareil", numero: j + 1, texte: b[j] }); i++; j++; }
+    p++;
+  }
+
+  // On replie les longues suites de lignes pareilles
+  const lignes = [];
+  let bloc = [];
+  const replier = () => {
+    if (bloc.length > contexte * 2 + 1) {
+      lignes.push(...bloc.slice(0, contexte));
+      lignes.push({ sorte: "saut", numero: 0,
+                    texte: `⋯ ${bloc.length - contexte * 2} lignes pareilles` });
+      lignes.push(...bloc.slice(-contexte));
+    } else {
+      lignes.push(...bloc);
+    }
+    bloc = [];
+  };
+  for (const l of brut) {
+    if (l.sorte === "pareil") bloc.push(l);
+    else { replier(); lignes.push(l); }
+  }
+  replier();
+  return { lignes,
+           ajouts: brut.filter((l) => l.sorte === "ajout").length,
+           retraits: brut.filter((l) => l.sorte === "retrait").length };
+}
+
+/** Une carte fermée : le fichier, ses comptes, pis le détail qu'un clic déplie. */
+function carteFichier(chemin, avant, apres, nouveau) {
+  const { lignes, ajouts, retraits } = calculerDiff(avant, apres);
+  const carte = creer("div", "carte");
+  const barre = creer("div", "carte-barre");
+  const fleche = creer("span", "carte-fleche", "▸");
+  barre.append(fleche, creer("span", "carte-nom", chemin));
+  if (nouveau) barre.append(creer("span", "carte-neuf", "nouveau fichier"));
+  if (ajouts) barre.append(creer("span", "carte-plus", `+${ajouts}`));
+  if (retraits) barre.append(creer("span", "carte-moins", `−${retraits}`));
+  barre.append(creer("span", "carte-vide"));
+  const modifier = creer("button", "bouton petit", "Modifier");
+  modifier.onclick = (e) => { e.stopPropagation(); ouvrirDansEditeur(chemin); };
+  barre.append(modifier);
+
+  const code = creer("div", "carte-code");
+  for (const l of lignes) {
+    const ligne = creer("div", "carte-ligne " + l.sorte);
+    if (l.sorte === "saut") {
+      ligne.textContent = l.texte;
+    } else {
+      ligne.append(creer("span", "carte-num", l.numero ? String(l.numero) : ""),
+                   creer("span", "carte-signe", { ajout: "+", retrait: "−", pareil: " " }[l.sorte]),
+                   creer("span", "carte-texte", l.texte));
+    }
+    code.append(ligne);
+  }
+  barre.onclick = () => {
+    const ouverte = carte.classList.toggle("ouverte");
+    fleche.textContent = ouverte ? "▾" : "▸";
+  };
+  carte.append(barre, code);
+  return carte;
+}
+
 
 /* ---------- L'état affiché en haut ---------- */
 function etat(message, sorte = "") {
@@ -144,7 +255,7 @@ function dessinerArbre() {
     const b = creer("button", "codex-fichier", f.chemin);
     b.title = `${f.chemin} — ${Math.max(1, Math.round(f.taille / 1024))} Ko`;
     if (actif && actif.chemin === f.chemin) b.classList.add("actif");
-    b.onclick = () => ouvrirFichier(f);
+    b.onclick = () => { $("#codex-fichiers").hidden = true; ouvrirFichier(f); };
     return b;
   }));
 }
@@ -166,13 +277,25 @@ async function ouvrirFichier(f) {
   } catch (err) { etat(direErreur(err), "mal"); }
 }
 
-function activer(onglet) {
+function activer(onglet, montrer = true) {
   if (actif) actif.contenu = $("#codex-code").value;
   actif = onglet;
   $("#codex-code").value = onglet ? onglet.contenu : "";
   $("#codex-code").disabled = !onglet;
   dessinerOnglets();
   dessinerArbre();
+  if (montrer && onglet) ouvrirEditeur();
+}
+
+function ouvrirEditeur() { $("#codex-editeur").hidden = false; }
+function fermerEditeur() { $("#codex-editeur").hidden = true; $("#codex-saisie").focus(); }
+
+/** Le bouton « Modifier » d'une carte : ouvre le fichier dans l'éditeur. */
+function ouvrirDansEditeur(chemin) {
+  const o = onglets.find((x) => x.chemin === chemin);
+  if (o) { activer(o); return; }
+  const f = arbre.find((x) => x.chemin === chemin);
+  if (f) ouvrirFichier(f);
 }
 
 function modifie(o) { return o.contenu !== o.origine; }
@@ -277,6 +400,18 @@ async function lireParChemin(chemin) {
 /** Met un contenu dans un onglet (sans toucher à GitHub : c'est toi qui commites). */
 function poserDansOnglet(chemin, contenu) {
   let o = onglets.find((x) => x.chemin === chemin);
+  // La version d'avant : celle de l'onglet s'il est ouvert, sinon ce qu'on a lu sur
+  // GitHub. Il faut la prendre avant d'écrire par-dessus, pis juste la première fois
+  // (si l'IA retouche le même fichier, l'original reste l'original).
+  if (!touches.has(chemin)) {
+    const f = arbre.find((x) => x.chemin === chemin);
+    touches.set(chemin, {
+      avant: o ? o.contenu : (f && cacheBlobs.get(f.sha)) || "",
+      apres: contenu, nouveau: !f,
+    });
+  } else {
+    touches.get(chemin).apres = contenu;
+  }
   if (!o) {
     const f = arbre.find((x) => x.chemin === chemin);
     o = { chemin, contenu: "", origine: f ? null : null, sha: f ? f.sha : undefined };
@@ -285,7 +420,7 @@ function poserDansOnglet(chemin, contenu) {
   }
   o.contenu = contenu;
   if (o === actif) $("#codex-code").value = contenu;
-  activer(o);
+  activer(o, false);
   return o;
 }
 
@@ -520,6 +655,7 @@ async function envoyer() {
 
   saisie.value = "";
   occupe = true;
+  touches = new Map();          // les changements de CETTE demande-là
   $("#codex-envoyer").disabled = true;
   jase.push({ role: "user", content: question });
   dessinerJase();
@@ -613,9 +749,13 @@ async function envoyer() {
   if (reponse) {
     jase.push({ role: "assistant", content: reponse });
     para.textContent = reponse;
-    ajouterBoutonsCode(para, reponse);
   } else {
-    para.textContent = "C'est fait.";
+    para.textContent = touches.size ? "C'est fait." : "Pas de changement cette fois-ci.";
+  }
+  cartes(boite);
+  if (touches.size && !autoPush()) {
+    boite.append(creer("div", "codex-geste",
+      "Clique un fichier pour voir ce qui a changé. Quand c'est correct, clique Enregistrer."));
   }
   dessinerOnglets();
   versLeBas();
@@ -623,25 +763,11 @@ async function envoyer() {
   $("#codex-envoyer").disabled = false;
 }
 
-/** Chaque bloc de code de la réponse reçoit un bouton pour l'appliquer. */
-function ajouterBoutonsCode(para, reponse) {
-  const blocs = [...reponse.matchAll(/```[^\n]*\n([\s\S]*?)```/g)].map((m) => m[1]);
-  if (!blocs.length || !actif) return;
-  const rang = creer("div", "codex-actions");
-  blocs.forEach((code, i) => {
-    const b = creer("button", "bouton petit", blocs.length > 1 ? `Copier le bloc ${i + 1}` : "Copier le code");
-    b.onclick = () => { navigator.clipboard?.writeText(code); b.textContent = "copié !"; };
-    rang.append(b);
-  });
-  const remplacer = creer("button", "bouton petit", `Remplacer ${actif.chemin.split("/").pop()}`);
-  remplacer.onclick = () => {
-    if (!confirm(`Remplacer tout le contenu de ${actif.chemin} par le premier bloc de code ?`)) return;
-    $("#codex-code").value = blocs[0];
-    dessinerOnglets();
-    etat("Remplacé. Clique Enregistrer pour l'envoyer sur GitHub.", "bien");
-  };
-  rang.append(remplacer);
-  para.append(rang);
+/** Une carte par fichier touché, fermée, à la fin de la réponse. */
+function cartes(boite) {
+  for (const [chemin, t] of touches) {
+    boite.append(carteFichier(chemin, t.nouveau ? "" : t.avant, t.apres, t.nouveau));
+  }
 }
 
 /* ---------- Ouverture ---------- */
@@ -664,6 +790,13 @@ function ouvrir() {
 
 /* ---------- Branchements ---------- */
 $("#codex-projet").onclick = choisirProjet;
+$("#codex-retour").onclick = fermerEditeur;
+$("#codex-liste").onclick = () => {
+  if (!arbre.length) { etat("Ouvre d'abord un projet.", "mal"); return; }
+  $("#codex-fichiers").hidden = false;
+  $("#codex-cherche").focus();
+};
+$("#codex-fichiers-fermer").onclick = () => { $("#codex-fichiers").hidden = true; };
 $("#codex-choix-fermer").onclick = () => { $("#codex-choix").hidden = true; };
 $("#codex-filtre").oninput = filtrerProjets;
 $("#codex-cherche").oninput = dessinerArbre;

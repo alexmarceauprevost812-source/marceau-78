@@ -253,12 +253,19 @@ pendant que la météo se charge.
 
 ### Le Codex web
 
-Le même Codex existe dans `/app`, et il est **agentique** : au lieu de répondre
-à partir de ce qu'on lui a montré, il se sert lui-même de cinq outils.
+Le Codex de `/app` a **exactement le même écran** que celui d'ordinateur : une
+seule colonne, centrée, pas de panneau de côté. Tu écris en bas, les fichiers
+touchés arrivent en cartes fermées avec leurs comptes, pis un clic montre les
+lignes ajoutées en vert et celles enlevées en rouge. **Modifier** ouvre
+l'éditeur par-dessus, **‹ Retour** le referme, **Fichiers** ouvre la liste du
+projet.
+
+Il est **agentique** : au lieu de répondre à partir de ce qu'on lui montre, il
+se sert lui-même de cinq outils (six si tu coches « Pousser tout seul »).
 
 | Outil | Ce qu'il fait |
 | --- | --- |
-| `lister_fichiers` | voit le projet, avec un filtre optionnel |
+| `lister_fichiers` | voit le projet, avec un filtre |
 | `chercher` | trouve un bout de texte partout, sans tout lire |
 | `lire_fichier` | ouvre un fichier au complet |
 | `ecrire_fichier` | réécrit un fichier |
@@ -266,9 +273,7 @@ Le même Codex existe dans `/app`, et il est **agentique** : au lieu de répondr
 | `pousser_sur_github` | envoie tout d'un coup — **seulement si tu as coché la case** |
 
 Il boucle jusqu'à quatorze tours, et chaque geste s'affiche pendant qu'il
-travaille (`✓ lit src/app.js`, `✓ corrige src/vieux.js`). Ses changements vont
-dans des **onglets marqués modifiés** — jamais directement sur GitHub. C'est toi
-qui cliques **Enregistrer**, avec ton message de commit.
+travaille (`✓ lit src/app.py`, `✓ corrige src/app.py`).
 
 Ça marche avec Claude (blocs `tool_use`) et avec les modèles Ollama qui gèrent
 les outils, comme `qwen3`, `llama3.2` ou `mistral`. Un modèle local sans
