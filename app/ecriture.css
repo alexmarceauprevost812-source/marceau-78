@@ -281,7 +281,7 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 }
 .panneau h2 { margin: 0 0 12px; font-size: 1.2rem; }
 .panneau p { margin: 0 0 12px; font-size: .92rem; line-height: 1.5; }
-.panneau a.bouton { display: inline-block; text-decoration: none; }
+.panneau a.bouton { display: inline-block; text-decoration: none; color: var(--noir); }
 .panneau code {
   background: var(--gris-zone); border-radius: 6px; padding: 1px 5px;
   font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85em;

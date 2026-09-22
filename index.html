@@ -164,10 +164,11 @@
       <li>Aucune dépendance</li>
       <li>Un seul fichier</li>
       <li>Testé sous Linux</li>
+      <li>Se met à jour toute seule</li>
     </ul>
     <div class="actions">
       <a class="bouton principal" href="/ecriture.py" download>Télécharger ecriture.py</a>
-      <a class="bouton secondaire" href="/app/">Essayer dans le navigateur</a>
+      <a class="bouton secondaire" href="/app/">Ouvrir dans le navigateur</a>
       <a class="bouton secondaire"
          href="https://github.com/alexmarceauprevost812-source/marceau-78">Voir le code</a>
     </div>
@@ -281,12 +282,23 @@
 <section>
   <div class="enveloppe">
     <p class="note">
-      <strong>Deux versions.</strong>
+      <strong>Deux versions, le même menu.</strong>
+      Trois boutons et c'est tout : Chat, Codex, Paramètres. Tout ce qui se règle —
+      ta clé, tes IA gratuites, les mises à jour — vit dans Paramètres.
       L'application de bureau ouvre une fenêtre sur ta machine : c'est elle qui a le Codex
       et les conversations gardées sur ton disque.
       La <a href="/app/">version web</a> reprend l'écriture, les schémas et la recherche
       web — avec les mêmes IA gratuites d'Ollama, et ta clé Claude qui
       <strong>reste sur ton appareil</strong>.
+    </p>
+    <p class="note" style="margin-top:18px">
+      <strong>Elle se tient à jour toute seule.</strong>
+      La version de bureau regarde au démarrage s'il y a du neuf, vérifie que le code
+      compile avant d'installer, et garde l'ancienne version à côté au cas où.
+      La <a href="/app/">version web</a>, elle, s'installe comme une vraie app
+      (« Installer » dans ton navigateur) et va chercher la dernière version dès que
+      tu es en ligne — tout en continuant de marcher sans Internet.
+      Les deux se coupent dans Paramètres si t'aimes mieux décider toi-même.
     </p>
   </div>
 </section>

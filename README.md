@@ -26,11 +26,14 @@ Thème gris mat, texte noir, boutons orange à coins ronds.
 | `logo_64.png` | le même en 64 px, pour la barre des tâches |
 | `logo_accueil.png` | le logo découpé en rond, affiché sur l'accueil |
 | `logo_marceau.png` | le logo de l'agent, en 320 px, qui glisse du centre vers la gauche |
+| `logo_192.png`, `logo_maskable.png` | les icônes de l'app installable |
 | `index.html` | la page de présentation publiée sur Vercel |
 | `app/` | la version web d'Écriture (`/app` sur le site) |
+| `app/sw.js` | le service worker : l'app hors ligne et ses mises à jour |
+| `app/manifest.webmanifest` | ce qui rend la version web installable |
 | `api/chat.js` | la fonction serverless qui parle à Claude, clé côté serveur |
 | `package.json` | la seule dépendance : le SDK Anthropic, installé par Vercel |
-| `vercel.json` | fait télécharger `ecriture.py` au lieu de l'afficher |
+| `vercel.json` | fait télécharger `ecriture.py`, et empêche le cache de figer `/app` |
 | `captures/` | les deux captures d'écran utilisées par la page |
 
 Les trois PNG sont cherchés à côté du script. S'ils manquent, l'application
@@ -131,18 +134,28 @@ facultatif : sans lui, Tkinter divise la taille par un nombre entier.
 ## Le menu de gauche
 
 Le bouton **☰** en haut à gauche ouvre un panneau à deux pages qui glissent
-l'une sur l'autre :
+l'une sur l'autre. La première ne montre que **trois modes**, de la même
+grosseur, chacun avec son pictogramme :
 
-- **Chat** et **Codex </>** en haut, pour passer de l'un à l'autre — le bouton
-  actif est en orange ;
-- tes conversations au milieu. Elles sont enregistrées toutes seules dans
-  `~/.local/share/ecriture/sessions`, une par fichier JSON, avec leurs schémas
-  et leurs sources. Un clic en rouvre une, un clic droit la supprime ;
-- **Paramètres** tout en bas, qui fait glisser la seconde page.
+| | Mode | Ce que ça fait |
+| --- | --- | --- |
+| ✎ | **Chat** | écrire et jaser avec l'IA |
+| ▤ | **Codex** | ouvrir un projet GitHub et travailler le code |
+| ⚙ | **Paramètres** | fait glisser la seconde page |
+
+Le mode affiché est en orange. En dessous des trois boutons, il ne reste que
+tes conversations : elles sont enregistrées toutes seules dans
+`~/.local/share/ecriture/sessions`, une par fichier JSON, avec leurs schémas et
+leurs sources. Un clic en rouvre une, un clic droit la supprime.
+
+**Tout ce qui se règle ou s'écrit est dans Paramètres** — le menu, lui, reste
+court. La version web a exactement le même menu.
 
 ## Paramètres
 
-La page **Paramètres** du menu regroupe les deux branchements :
+La page **Paramètres** du menu regroupe tout ce qui se règle : les deux
+branchements, les IA gratuites, et les mises à jour. Elle défile, pour tenir
+sur un écran de portable.
 
 | | Pour quoi | Où la prendre |
 | --- | --- | --- |
@@ -284,6 +297,52 @@ tes frais.** Mets un code, ou garde la protection Vercel active sur `/app`.
 
 La réponse arrive en flux (SSE) : le texte s'affiche pendant que Claude écrit,
 plutôt que d'un bloc à la fin. La fonction est limitée à 60 secondes.
+
+## Se télécharger, pis se tenir à jour
+
+Écriture connaît son propre numéro de version (`VERSION`, en haut du script).
+Les deux versions se mettent à jour toutes seules, chacune à sa manière.
+
+### La version de bureau
+
+Au démarrage, en arrière-plan, l'application va lire le `ecriture.py` publié sur
+GitHub et compare les deux numéros. S'il y a du neuf :
+
+1. elle **vérifie que le code téléchargé compile** — un fichier brisé est refusé
+   avant qu'il touche à quoi que ce soit ;
+2. elle **garde ton ancienne version** à côté, sous `ecriture_precedent.py` ;
+3. elle **remplace le fichier d'un seul coup** (`os.replace`), jamais en deux
+   morceaux : il n'y a pas d'instant où le script est à moitié écrit.
+
+Puis elle te dit de redémarrer. Elle ne redémarre jamais toute seule pendant que
+t'écris.
+
+L'adresse est **écrite en dur dans le script** : Écriture ne téléchargera jamais
+de code venu d'ailleurs, même si un fichier de configuration disait le
+contraire. Ça reste du code qui se remplace lui-même à partir d'Internet, faque
+ça vaut ce que vaut ta confiance envers ce dépôt-là : si t'aimes mieux décider
+toi-même, décoche **Se mettre à jour toute seule** dans Paramètres. Le bouton
+**⟳ Vérifier maintenant** fait alors la job à la main.
+
+### La version web
+
+Elle s'installe comme une vraie application — le bouton **Installer l'app**
+dans Paramètres, ou l'invite de ton navigateur. Une fois installée, elle
+s'ouvre dans sa propre fenêtre, avec son icône.
+
+Son service worker (`app/sw.js`) va **toujours voir le réseau en premier** et ne
+garde le cache que comme filet : dès que t'es en ligne, t'as la dernière
+version, et sans Internet l'app se charge quand même.
+
+> Détail qui compte : un `fetch()` ordinaire dans un service worker se fait
+> servir par le cache du navigateur, ce qui fait qu'un « réseau d'abord » naïf
+> n'atteint jamais le réseau. Il faut `cache: "reload"`. C'est ce qui est fait
+> ici, avec en plus des en-têtes `no-cache` sur `/app` (dans `vercel.json`) pour
+> les navigateurs sans service worker.
+
+Quand une nouvelle version arrive pendant que l'app est ouverte, elle prend la
+place tout de suite (`skipWaiting`), le bandeau te le dit, et la page se
+recharge une seule fois.
 
 ## Personnaliser
 
