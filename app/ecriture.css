@@ -24,6 +24,9 @@
 }
 
 * { box-sizing: border-box; }
+/* Un display: de nous autres bat le « hidden » du navigateur : on remet ça droit,
+   sinon un panneau caché continue d'avaler les clics de toute la page. */
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; overflow: hidden; }
 body {
   background: var(--gris-fond);
@@ -72,10 +75,40 @@ button { font: inherit; color: inherit; }
   transform: translateX(-100%);
   transition: transform .34s cubic-bezier(.22, .61, .36, 1);
   z-index: 20;
+  overflow: hidden;
+}
+.menu.ouvert { transform: none; }
+
+/* Deux pages larges comme le menu, collées : on glisse de l'une à l'autre. */
+.pages {
+  display: flex; width: 200%; height: 100%;
+  transition: transform .3s cubic-bezier(.22, .61, .36, 1);
+}
+.pages.parametres { transform: translateX(-50%); }
+.page {
+  flex: 0 0 50%; min-width: 0; height: 100%;
   display: flex; flex-direction: column;
   padding: 70px 14px 14px;
 }
-.menu.ouvert { transform: none; }
+.defile { flex: 1; overflow-y: auto; margin: 0 -6px; padding: 8px 6px 14px; }
+.trait { border: 0; border-top: 2px solid #5e5e5e; margin: 14px 0; }
+.entete { display: flex; align-items: center; gap: 10px; }
+.entete .bouton { flex: 0 0 auto; }
+.entete strong { font-size: 1.02rem; white-space: nowrap; }
+.pic { display: inline-block; width: 1.1em; text-align: center; }
+
+/* Les trois modes : même grosseur, on les voit d'un coup d'œil. */
+.modes { display: flex; flex-direction: column; gap: 8px; }
+.mode {
+  display: flex; align-items: center; gap: 12px;
+  background: #9a9a9a; border: 0; border-radius: var(--r-bouton);
+  padding: 12px 14px; font-size: 1rem; font-weight: 700;
+  text-align: left; cursor: pointer;
+  transition: background .12s ease;
+}
+.mode:hover { background: #a8a8a8; }
+.mode.actif { background: var(--orange); }
+.mode:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .menu h2 {
   margin: 12px 4px 6px; font-size: .78rem; text-transform: uppercase;
   letter-spacing: .06em; opacity: .75;
@@ -193,9 +226,7 @@ button { font: inherit; color: inherit; }
   .astuce { display: none; }
 }
 
-/* ---------- Réglages dans le menu ---------- */
-.reglages { border-top: 2px solid #5e5e5e; margin: 8px -6px 0; padding: 10px 6px 4px; }
-.reglages h2 { margin-top: 10px; }
+/* ---------- Réglages (page 2 du menu) ---------- */
 .etat {
   margin: 0 0 6px; font-size: .85rem; font-weight: 700;
   padding: 5px 9px; border-radius: 8px; background: #8a8a8a;
@@ -224,3 +255,48 @@ select.moteur {
   font-family: inherit; text-overflow: ellipsis;
 }
 select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+/* ---------- Les IA gratuites qu'on conseille ---------- */
+.modeles { list-style: none; margin: 0 0 8px; padding: 0; }
+.modeles li {
+  background: #8a8a8a; border-radius: 10px; padding: 8px 10px; margin-bottom: 6px;
+}
+.modeles .ligne { display: flex; align-items: center; gap: 8px; }
+.modeles .nom { font-weight: 700; font-size: .86rem; flex: 1; min-width: 0; }
+.modeles .taille { font-size: .74rem; opacity: .8; white-space: nowrap; }
+.modeles .quoi { font-size: .76rem; line-height: 1.4; margin: 4px 0 0; }
+.modeles .bouton { padding: 4px 9px; font-size: .72rem; border-radius: 8px; flex: 0 0 auto; }
+.modeles li.installe { background: var(--orange); }
+
+/* ---------- Le panneau du Codex ---------- */
+.panneau {
+  position: absolute; inset: 0; z-index: 40;
+  background: #00000066; display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.panneau .dedans {
+  position: relative; background: var(--gris-menu); color: var(--noir);
+  border: 2px solid #5e5e5e; border-radius: var(--r-zone);
+  padding: 24px 26px; max-width: 460px; width: 100%;
+}
+.panneau h2 { margin: 0 0 12px; font-size: 1.2rem; }
+.panneau p { margin: 0 0 12px; font-size: .92rem; line-height: 1.5; }
+.panneau a.bouton { display: inline-block; text-decoration: none; }
+.panneau code {
+  background: var(--gris-zone); border-radius: 6px; padding: 1px 5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85em;
+}
+.fermer {
+  position: absolute; top: 10px; right: 12px;
+  border: 0; background: none; cursor: pointer;
+  font-size: 1.6rem; line-height: 1; opacity: .6; padding: 2px 6px; border-radius: 8px;
+}
+.fermer:hover { opacity: 1; background: #ffffff40; }
+
+/* ---------- L'annonce de mise à jour ---------- */
+.annonce {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+  z-index: 50; background: var(--orange); border-radius: var(--r-bouton);
+  padding: 10px 18px; font-size: .86rem; font-weight: 700;
+  box-shadow: 0 4px 14px #0003;
+}

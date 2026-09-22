@@ -1,0 +1,17 @@
+{
+  "name": "Écriture",
+  "short_name": "Écriture",
+  "description": "Un espace d'écriture avec un assistant qui parle québécois.",
+  "lang": "fr-CA",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#8c8c8c",
+  "theme_color": "#8c8c8c",
+  "icons": [
+    { "src": "/logo_192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/logo.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/logo_maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

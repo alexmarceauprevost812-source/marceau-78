@@ -6,7 +6,10 @@
 <title>Écriture</title>
 <meta name="description" content="Écriture dans le navigateur : IA gratuites sur ton ordi avec Ollama, ou Claude avec ta propre clé.">
 <meta name="robots" content="noindex">
+<meta name="theme-color" content="#8c8c8c">
 <link rel="icon" href="/logo_64.png">
+<link rel="apple-touch-icon" href="/logo_accueil.png">
+<link rel="manifest" href="/app/manifest.webmanifest">
 <link rel="stylesheet" href="/app/ecriture.css">
 </head>
 <body>
@@ -14,39 +17,75 @@
 <button class="bouton menu-bouton" id="menu-bouton" aria-label="Menu">☰</button>
 
 <aside class="menu" id="menu">
-  <button class="bouton" id="nouveau-menu">+ Nouvelle conversation</button>
+ <div class="pages" id="pages">
 
-  <h2>Conversations</h2>
-  <div class="sessions" id="sessions"></div>
+  <!-- ---------- Page 1 : les trois modes, pis tes conversations ---------- -->
+  <section class="page">
+    <nav class="modes">
+      <button class="mode actif" id="nav-chat"><span class="pic">✎</span> Chat</button>
+      <button class="mode" id="nav-codex"><span class="pic">▤</span> Codex</button>
+      <button class="mode" id="nav-param"><span class="pic">⚙</span> Paramètres</button>
+    </nav>
+    <hr class="trait">
+    <button class="bouton" id="nouveau-menu">+ Nouvelle conversation</button>
+    <h2>Conversations</h2>
+    <div class="sessions" id="sessions"></div>
+  </section>
 
-  <div class="reglages">
-    <h2>Ta clé Claude</h2>
-    <p class="etat non" id="etat-cle">Aucune clé sur cet appareil</p>
-    <p class="fin">Elle reste dans ce navigateur. Le navigateur appelle Claude
-      directement&nbsp;: <strong>elle ne passe jamais par le serveur du site.</strong></p>
-    <input class="champ" id="cle-claude" type="password" autocomplete="off"
-           spellcheck="false" placeholder="sk-ant-…" aria-label="Ta clé API Claude">
-    <label class="coche"><input type="checkbox" id="montrer-cle"> Montrer</label>
-    <div class="rang-boutons">
-      <button class="bouton petit" id="enregistrer-cle">Enregistrer</button>
-      <button class="bouton petit" id="supprimer-cle">Supprimer</button>
+  <!-- ---------- Page 2 : tout ce qui se règle ---------- -->
+  <section class="page">
+    <div class="entete">
+      <button class="bouton petit" id="retour">‹ Retour</button>
+      <strong><span class="pic">⚙</span> Paramètres</strong>
     </div>
+    <hr class="trait">
+    <div class="defile">
+      <p class="fin">Tout ce qui se règle est ici. Le menu, lui, reste simple.</p>
 
-    <h2>IA gratuites (Ollama)</h2>
-    <p class="etat non" id="etat-ollama">Vérification…</p>
-    <div id="aide-ollama" hidden>
-      <p class="fin">Elles tournent sur ton ordi, gratuitement. Installe Ollama depuis
-        <a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com</a>,
-        télécharge un modèle (<code>ollama pull llama3.2</code>), puis démarre-le en
-        autorisant ce site&nbsp;:</p>
-      <code class="commande" id="commande-ollama">OLLAMA_ORIGINS=… ollama serve</code>
+      <h2>Ta clé Claude</h2>
+      <p class="etat non" id="etat-cle">Aucune clé sur cet appareil</p>
+      <p class="fin">Elle reste dans ce navigateur. Le navigateur appelle Claude
+        directement&nbsp;: <strong>elle ne passe jamais par le serveur du site.</strong></p>
+      <input class="champ" id="cle-claude" type="password" autocomplete="off"
+             spellcheck="false" placeholder="sk-ant-…" aria-label="Ta clé API Claude">
+      <label class="coche"><input type="checkbox" id="montrer-cle"> Montrer</label>
       <div class="rang-boutons">
-        <button class="bouton petit" id="copier-ollama">Copier</button>
-        <button class="bouton petit" id="rafraichir-ollama">Revérifier</button>
+        <button class="bouton petit" id="enregistrer-cle">Enregistrer</button>
+        <button class="bouton petit" id="supprimer-cle">Supprimer</button>
       </div>
+      <p class="fin" id="mot-cle"></p>
+
+      <hr class="trait">
+      <h2>IA gratuites (Ollama)</h2>
+      <p class="etat non" id="etat-ollama">Vérification…</p>
+      <div id="aide-ollama" hidden>
+        <p class="fin">Elles tournent sur ton ordi, gratuitement. Installe Ollama depuis
+          <a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com</a>,
+          télécharge un modèle, puis démarre-le en autorisant ce site&nbsp;:</p>
+        <code class="commande" id="commande-ollama">OLLAMA_ORIGINS=… ollama serve</code>
+        <div class="rang-boutons">
+          <button class="bouton petit" id="copier-ollama">Copier</button>
+          <button class="bouton petit" id="rafraichir-ollama">Revérifier</button>
+        </div>
+      </div>
+      <p class="fin">Les modèles qu'on conseille, du plus léger au plus lourd&nbsp;:</p>
+      <ul class="modeles" id="modeles-gratuits"></ul>
+
+      <hr class="trait">
+      <h2>L'application</h2>
+      <p class="etat" id="etat-app">Version…</p>
+      <p class="fin">Elle se met à jour toute seule&nbsp;: chaque fois que tu l'ouvres,
+        elle va chercher la dernière version en arrière-plan.</p>
+      <div class="rang-boutons">
+        <button class="bouton petit" id="installer-app" hidden>Installer l'app</button>
+        <button class="bouton petit" id="verifier-maj">⟳ Vérifier</button>
+      </div>
+      <p class="fin">Pour la version ordinateur, avec le Codex&nbsp;:
+        <a href="/ecriture.py" download>télécharger Écriture</a>.</p>
     </div>
-    <p class="fin" id="mot-cle"></p>
-  </div>
+  </section>
+
+ </div>
 </aside>
 
 <div class="barre">
@@ -55,6 +94,21 @@
 </div>
 
 <main class="doc" id="doc" aria-live="polite"></main>
+
+<!-- Le Codex : il a besoin de GitHub sur ta machine, donc il vit dans l'app d'ordi. -->
+<div class="panneau" id="panneau-codex" hidden>
+  <div class="dedans">
+    <button class="fermer" id="fermer-codex" aria-label="Fermer">×</button>
+    <h2><span class="pic">▤</span> Codex</h2>
+    <p>Le Codex ouvre un projet GitHub, colore le code, pis laisse l'IA le lire,
+      l'écrire pis le corriger avec toi.</p>
+    <p>Il travaille dans tes fichiers, faque il vit dans la version ordinateur —
+      c'est la même app, avec le même menu.</p>
+    <p><a class="bouton" href="/ecriture.py" download>⬇ Télécharger Écriture</a></p>
+    <p class="fin">Un seul fichier. Tu l'ouvres avec <code>python3 ecriture.py</code>
+      et il se tient à jour tout seul après.</p>
+  </div>
+</div>
 
 <div class="composeur" id="composeur">
   <img class="marque" src="/logo_marceau.png" alt="" width="160" height="160">
@@ -69,6 +123,8 @@
     <span class="astuce" id="astuce-moteur"></span>
   </div>
 </div>
+
+<div class="annonce" id="annonce" hidden></div>
 
 <script src="/app/ecriture.js"></script>
 </body>

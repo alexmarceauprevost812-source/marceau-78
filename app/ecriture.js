@@ -629,6 +629,7 @@ async function majOllama() {
   const etat = $("#etat-ollama");
   const aide = $("#aide-ollama");
   const installes = await construireMoteurs();
+  dessinerModelesGratuits(installes);
   if (installes.length) {
     etat.textContent = `Ollama répond ✓ — ${installes.length} modèle(s) : `
       + installes.map((n) => n.replace(/:latest$/, "")).join(", ");
@@ -675,6 +676,121 @@ function ouvrirMenu() { menu.classList.add("ouvert"); dessinerSessions(); majPar
 function fermerMenu() { menu.classList.remove("ouvert"); }
 function basculerMenu() { menu.classList.contains("ouvert") ? fermerMenu() : ouvrirMenu(); }
 
+/* ---------- Les trois modes du menu ---------- */
+const pages = $("#pages");
+const panneauCodex = $("#panneau-codex");
+
+function allerPage(nom) {
+  const parametres = nom === "parametres";
+  pages.classList.toggle("parametres", parametres);
+  if (parametres) { majParametres(); majOllama(); majApp(); }
+}
+
+function majModes() {
+  const codex = !panneauCodex.hidden;
+  $("#nav-chat").classList.toggle("actif", !codex);
+  $("#nav-codex").classList.toggle("actif", codex);
+}
+
+function ouvrirCodex() { panneauCodex.hidden = false; fermerMenu(); majModes(); }
+function fermerCodex() { panneauCodex.hidden = true; majModes(); }
+
+function allerChat() { fermerCodex(); fermerMenu(); saisie.focus(); }
+
+/* ---------- Les IA gratuites qu'on conseille ---------- */
+function dessinerModelesGratuits(installes = []) {
+  const liste = $("#modeles-gratuits");
+  const dejaLa = new Set(installes.map((n) => n.replace(/:.*$/, "")));
+  liste.replaceChildren(...OLLAMA_SUGGERES.map(([nom, taille, quoi]) => {
+    const li = creer("li");
+    const installe = dejaLa.has(nom);
+    if (installe) li.className = "installe";
+    const ligne = creer("div", "ligne");
+    const bouton = creer("button", "bouton petit", installe ? "✓ installé" : "Copier");
+    bouton.onclick = () => {
+      navigator.clipboard?.writeText(`ollama pull ${nom}`);
+      bouton.textContent = "copié !";
+      setTimeout(() => { bouton.textContent = installe ? "✓ installé" : "Copier"; }, 1600);
+    };
+    ligne.append(creer("span", "nom", nom), creer("span", "taille", taille), bouton);
+    li.append(ligne, creer("p", "quoi", quoi));
+    return li;
+  }));
+}
+
+/* ---------- L'app : s'installer, pis se tenir à jour ---------- */
+const VERSION_APP = "1.1.0";
+let inviteInstall = null;      // le navigateur nous prête son « Installer »
+let rechargeFaite = false;
+
+function annoncer(texte, duree = 4000) {
+  const boite = $("#annonce");
+  boite.textContent = texte;
+  boite.hidden = false;
+  clearTimeout(annoncer.minuterie);
+  if (duree) annoncer.minuterie = setTimeout(() => { boite.hidden = true; }, duree);
+}
+
+function majApp() {
+  const installee = matchMedia("(display-mode: standalone)").matches;
+  const etat = $("#etat-app");
+  etat.textContent = `Version ${VERSION_APP}`
+    + (installee ? " — installée sur cet appareil" : "")
+    + (navigator.onLine ? "" : " — hors ligne");
+  etat.className = "etat " + (navigator.onLine ? "oui" : "non");
+  $("#installer-app").hidden = !inviteInstall;
+}
+
+async function brancherServiceWorker() {
+  if (!("serviceWorker" in navigator)) return null;
+  // Un service worker demande une page servie en https (ou en local).
+  if (location.protocol !== "https:" && location.hostname !== "localhost") return null;
+  try {
+    const inscription = await navigator.serviceWorker.register("/app/sw.js", { scope: "/app/" });
+    inscription.addEventListener("updatefound", () => {
+      const neuf = inscription.installing;
+      if (!neuf) return;
+      neuf.addEventListener("statechange", () => {
+        // Un contrôleur existait déjà : c'est donc une vraie mise à jour, pas la pose initiale.
+        if (neuf.state === "installed" && navigator.serviceWorker.controller) {
+          annoncer("Nouvelle version — ça se recharge…", 0);
+          neuf.postMessage("saute-la-file");
+        }
+      });
+    });
+    // On regarde s'il y a du neuf en revenant sur l'app, pis aux demi-heures.
+    addEventListener("focus", () => inscription.update().catch(() => {}));
+    setInterval(() => inscription.update().catch(() => {}), 30 * 60 * 1000);
+    return inscription;
+  } catch (e) {
+    console.warn("service worker :", e);
+    return null;
+  }
+}
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    // La toute première pose prend le contrôle sans qu'il y ait rien à recharger.
+    if (rechargeFaite || !brancherServiceWorker.avaitUnControleur) return;
+    rechargeFaite = true;
+    location.reload();
+  });
+  brancherServiceWorker.avaitUnControleur = !!navigator.serviceWorker.controller;
+}
+
+addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();          // on garde l'invite pour notre propre bouton
+  inviteInstall = e;
+  $("#installer-app").hidden = false;
+});
+addEventListener("appinstalled", () => {
+  inviteInstall = null;
+  annoncer("Écriture est installée. Tu peux l'ouvrir comme n'importe quelle app.");
+  majApp();
+});
+addEventListener("online", majApp);
+addEventListener("offline", majApp);
+
 /* ---------- Branchements ---------- */
 $("#envoyer").onclick = envoyer;
 $("#nouveau").onclick = () => nouveau();
@@ -706,13 +822,35 @@ $("#copier-ollama").onclick = () => {
   $("#mot-cle").textContent = "Commande copiée.";
 };
 $("#rafraichir-ollama").onclick = majOllama;
+$("#nav-chat").onclick = allerChat;
+$("#nav-codex").onclick = ouvrirCodex;
+$("#nav-param").onclick = () => allerPage("parametres");
+$("#retour").onclick = () => allerPage("principale");
+$("#fermer-codex").onclick = fermerCodex;
+panneauCodex.onclick = (e) => { if (e.target === panneauCodex) fermerCodex(); };
+
+$("#installer-app").onclick = async () => {
+  if (!inviteInstall) { annoncer("Ton navigateur ne propose pas l'installation ici."); return; }
+  inviteInstall.prompt();
+  const { outcome } = await inviteInstall.userChoice;
+  if (outcome !== "accepted") annoncer("Correct — tu pourras l'installer plus tard.");
+  inviteInstall = null;
+  majApp();
+};
+$("#verifier-maj").onclick = async () => {
+  annoncer("On regarde s'il y a du neuf…", 2500);
+  const inscription = await navigator.serviceWorker?.getRegistration("/app/");
+  if (!inscription) { annoncer("Les mises à jour auto marchent une fois le site en ligne."); return; }
+  await inscription.update().catch(() => {});
+  if (!inscription.installing && !inscription.waiting) annoncer(`Version ${VERSION_APP} — t'es à jour.`);
+};
 
 saisie.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); envoyer(); }
 });
 addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); sauvegarder(); }
-  if (e.key === "Escape") fermerMenu();
+  if (e.key === "Escape") { if (!panneauCodex.hidden) fermerCodex(); else fermerMenu(); }
 });
 doc.addEventListener("click", fermerMenu);
 
@@ -720,5 +858,11 @@ doc.addEventListener("click", fermerMenu);
 mesurer();
 dessinerSessions();
 majParametres();
-construireMoteurs().then(majAstuceMoteur);
+construireMoteurs().then((installes) => {
+  majAstuceMoteur();
+  dessinerModelesGratuits(installes);
+});
+majApp();
+majModes();
+brancherServiceWorker();
 saisie.focus();
