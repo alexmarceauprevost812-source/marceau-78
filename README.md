@@ -9,6 +9,18 @@ document que l'on peut relire, modifier et sauvegarder.
 
 Thème gris mat, texte noir, boutons orange.
 
+## Fichiers
+
+| Fichier | Rôle |
+| --- | --- |
+| `ecriture.py` | toute l'application |
+| `logo.png` | le logo MARCEAU en 512 px, servant d'icône de fenêtre |
+| `logo_64.png` | le même en 64 px, pour la barre des tâches |
+
+Les deux PNG sont chargés au démarrage et passés à `iconphoto` : le
+gestionnaire de fenêtres choisit la taille qui lui convient. S'ils manquent,
+l'application démarre quand même, sans icône.
+
 ## Lancer
 
 ```bash
@@ -69,6 +81,7 @@ Les couleurs, les polices et les proportions sont regroupées en haut de
 - `FAMILLE`, `POLICE`, `POLICE_BOUTON`, `POLICE_INVITE`
 - `MARGE` (espace sous la saisie), `LARGEUR` (largeur des zones, en fraction de
   la fenêtre), `HAUT_DOC` (hauteur à laquelle commence le document)
+- `LOGO`, `LOGO_PETIT` — les deux fichiers d'icône, cherchés à côté du script
 
 Juste en dessous, les réglages de l'assistant :
 

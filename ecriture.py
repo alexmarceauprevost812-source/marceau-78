@@ -15,6 +15,11 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 
+# ---------- Fichiers ----------
+DOSSIER = Path(__file__).resolve().parent
+LOGO = DOSSIER / "logo.png"           # le logo, en 512 px
+LOGO_PETIT = DOSSIER / "logo_64.png"  # le même en petit, pour la barre des tâches
+
 # ---------- Couleurs & style (change-les ici) ----------
 GRIS_FOND = "#8c8c8c"      # fond gris mat
 GRIS_ZONE = "#a6a6a6"      # zones d'écriture, un peu plus pâles
@@ -152,6 +157,7 @@ class AppEcriture(tk.Tk):
         self.geometry("1000x700")
         self.minsize(600, 400)
         self.configure(bg=GRIS_FOND)
+        self.mettre_icone()
 
         self.premiere_ligne = True
         self.en_animation = False
@@ -198,6 +204,20 @@ class AppEcriture(tk.Tk):
 
         self.centrer_saisie()
         self.saisie.focus_set()
+
+    # ---------- Icône de la fenêtre ----------
+    def mettre_icone(self):
+        # Tk garde pas de référence aux images : on les range sur l'objet.
+        # Deux tailles : le gestionnaire de fenêtres prend celle qui lui va.
+        self.icones = []
+        for chemin in (LOGO_PETIT, LOGO):
+            if chemin.exists():
+                try:
+                    self.icones.append(tk.PhotoImage(file=str(chemin)))
+                except tk.TclError:
+                    pass   # Tk trop vieux pour lire le PNG : tant pis pour l'icône
+        if self.icones:
+            self.iconphoto(True, *self.icones)
 
     # ---------- Positions ----------
     def centrer_saisie(self):
