@@ -1566,6 +1566,79 @@ class StudioImage(tk.Frame):
         self.app.mettre_image_dans_codex(self.image_montree())
 
 
+# ---------- Les pouvoirs magiques : tout roule sur ton ordi, gratuitement ----------
+# Chaque pouvoir s'installe à part. S'il en manque un, l'app le dit au lieu de planter :
+# c'est le même patron que Pillow plus haut.
+
+def manque(quoi, commande, pourquoi=""):
+    """Le message quand un pouvoir n'est pas installé : clair, en français, avec la commande."""
+    return (f"{quoi} n'est pas installé sur ton ordi.\n\n"
+            f"Pour l'ajouter, copie-colle ça dans un terminal :\n\n{commande}\n\n"
+            + (pourquoi + "\n\n" if pourquoi else "")
+            + "Ensuite, ferme pis rouvre Écriture.")
+
+
+MESSAGE_OLLAMA = (
+    "Ollama ne répond pas sur ton ordi.\n\n"
+    "1. Installe-le :  curl -fsSL https://ollama.com/install.sh | sh\n"
+    "2. Télécharge un modèle :  ollama pull llama3.2\n"
+    "3. Démarre-le :  ollama serve\n\n"
+    "Ollama est gratuit et tourne seulement chez vous : rien ne part sur Internet.")
+
+# Les quatre façons de réécrire un texte (pouvoir « Changer le style »)
+STYLES = (
+    ("quebecois", "Québécois", "en bon français québécois familier, comme quelqu'un d'ici qui jase "
+                               "avec un chum : tutoiement, tournures orales (y'a, j'suis, faque, pis, "
+                               "ben, là), expressions d'ici quand ça sonne naturel"),
+    ("formel", "Formel", "dans un français soutenu et professionnel : vouvoiement, phrases complètes, "
+                         "vocabulaire précis, aucune tournure familière"),
+    ("drole", "Drôle", "de façon drôle et légère : images cocasses, exagérations amusantes, clins "
+                       "d'œil — sans jamais changer ce que le texte veut dire"),
+    ("poetique", "Poétique", "de façon poétique : images, rythme, musicalité des phrases, sans rimes "
+                             "forcées"),
+)
+
+
+def instructions_pouvoir(quoi, style=None):
+    """Les consignes qu'on donne à l'IA locale selon le pouvoir demandé."""
+    base = ("Tu es un outil d'écriture. Tu réponds SEULEMENT avec le texte demandé : "
+            "pas d'explication, pas de préambule, pas de guillemets autour, pas de Markdown. ")
+    if quoi == "continuer":
+        return base + ("On te donne un texte. Écris la SUITE de ce texte, dans la même langue, "
+                       "le même ton et le même style, sans répéter ce qui est déjà écrit. "
+                       "Un ou deux paragraphes, pas plus. Commence directement par la suite.")
+    if quoi == "style":
+        return base + (f"On te donne un texte. Réécris-le {style}. Garde exactement le même sens et "
+                       "les mêmes informations : tu changes la façon de le dire, pas ce qui est dit. "
+                       "Garde à peu près la même longueur.")
+    if quoi == "resumer":
+        return base + ("On te donne un texte. Résume-le en quelques lignes, dans la langue du texte. "
+                       "Va à l'essentiel : trois à six phrases courtes, ou des tirets s'il y a "
+                       "plusieurs points distincts.")
+    return base
+
+
+def texte_par_ollama(modele, texte, quoi, style=None):
+    """Envoie le texte à Ollama avec les consignes du pouvoir, pis rend ce qui revient."""
+    reponse, _ = appeler_ollama(modele, [{"role": "user", "content": texte}],
+                                instructions_pouvoir(quoi, style), num_ctx=CTX_OLLAMA_CODEX)
+    return nettoyer_sortie(reponse)
+
+
+def nettoyer_sortie(texte):
+    """Enlève ce qu'un modèle local ajoute malgré les consignes : guillemets, ```, préambule."""
+    texte = re.sub(r"<think>.*?</think>", "", texte or "", flags=re.S).strip()
+    for _ in range(2):   # « Voici la suite : » PUIS ```…``` : il faut enlever les deux, dans l'ordre
+        texte = re.sub(r"^(voici|voilà|bien sûr|certainement)[^\n:]{0,40}:\s*\n+", "",
+                       texte, flags=re.I).strip()
+        bloc = re.match(r"^```[a-zA-Z]*\n(.*?)\n?```$", texte, re.S)
+        if bloc:
+            texte = bloc.group(1).strip()
+    if len(texte) > 1 and texte[0] in "\"«“" and texte[-1] in "\"»”":
+        texte = texte[1:-1]
+    return texte.strip()
+
+
 # ---------- Moteur de schéma ----------
 MOTS_PLAN = re.compile(
     r"\b(plan|étapes?|etapes?|stratégie|marche à suivre|comment (faire|je|on|lancer|commencer))\b",
@@ -3135,6 +3208,7 @@ class AppEcriture(tk.Tk):
         self.images_tk = []          # vignettes affichées (Tkinter les efface si on les garde pas)
         self.image_courante = None   # la dernière image de la conversation (pour le Studio)
         self.image_courante_chemin = None
+        self.occupe_magie = False    # un pouvoir magique est en train de travailler
         self.schemas = []
         self.question_en_cours = ""
         self.menu_ouvert = False
@@ -3150,6 +3224,8 @@ class AppEcriture(tk.Tk):
         self.barre = tk.Frame(self, bg=GRIS_FOND)
         bouton_orange(self.barre, "Sauvegarder", self.sauvegarder).pack(side="left", padx=(0, 10))
         bouton_orange(self.barre, "Nouveau", self.nouveau).pack(side="left")
+        self.bouton_magie = bouton_orange(self.barre, "\u2728  Magie", self.ouvrir_menu_magie)
+        self.bouton_magie.pack(side="left", padx=(10, 0))
 
         # --- Le logo de l'agent (s'il est à côté du script) ---
         self.logo = None
@@ -3160,11 +3236,13 @@ class AppEcriture(tk.Tk):
                 print("Logo pas chargé :", e)
 
         # --- La conversation (cachée au début, modifiable) ---
-        self.document = tk.Text(self, **style_zone())
+        # undo=True : Ctrl+Z ramène le texte d'avant quand un pouvoir magique le change
+        self.document = tk.Text(self, undo=True, maxundo=-1, **style_zone())
         self.configurer_tags(self.document, retrait=LOGO_AVATAR + 12 if self.logo else 0,
                              taille_reponse=TAILLE_AGENT)
         self.document.config(yscrollcommand=self.sur_defilement_doc)
         self.document.bind("<Configure>", lambda e: self.sur_defilement_doc())
+        self.document.bind("<Button-3>", self.clic_droit_document)     # clic droit : le menu Magie
         self.nb_meteo = 0
 
         # --- La zone où on écrit (centrée au début) ---
@@ -3186,6 +3264,8 @@ class AppEcriture(tk.Tk):
         self.options.pack(fill="x", pady=(8, 0))
         self.creer_bouton_moteur(self.options).pack(side="left")
         self.bouton_image(self.options, self.joindre_images).pack(side="left", padx=(8, 0))
+        bouton_orange(self.options, "\u2728  Magie", self.ouvrir_menu_magie, taille=10).pack(
+            side="left", padx=(8, 0))
         self.cadre_pieces = tk.Frame(self.options, bg=GRIS_FOND)
         self.cadre_pieces.pack(side="left")
 
@@ -3894,6 +3974,7 @@ class AppEcriture(tk.Tk):
         self.images_tk = []
         self.image_courante = self.image_courante_chemin = None
         self.document.delete("1.0", "end")
+        self.document.edit_reset()   # on repart à neuf : Ctrl+Z ne ramène pas l'ancienne conversation
         self.title("Écriture")
         if self.logo:
             self.logo.arreter_suivi()
@@ -4116,6 +4197,230 @@ class AppEcriture(tk.Tk):
         self.document.tag_add("avatar", index)
         return index
 
+    # ---------- Les pouvoirs magiques ----------
+    def construire_menu_magie(self):
+        """Le menu ✨ Magie : les pouvoirs qui roulent sur ton ordi, gratuitement."""
+        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+                       activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
+        menu.add_command(label="✨  Continuer mon texte", command=self.magie_continuer)
+        menu.add_command(label="\U0001fa84  Corriger les fautes", command=self.magie_corriger)
+        styles = tk.Menu(menu, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+                         activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
+        for cle, nom, _ in STYLES:
+            styles.add_command(label=nom, command=lambda c=cle: self.magie_style(c))
+        menu.add_cascade(label="\U0001f3ad  Changer le style", menu=styles)
+        menu.add_command(label="\U0001f4dc  Résumer", command=self.magie_resumer)
+        menu.add_separator()
+        menu.add_command(label="\U0001f3a4  Dicter", command=self.magie_dicter)
+        menu.add_command(label="\U0001f50a  Lire à voix haute", command=self.magie_lire)
+        menu.add_command(label="\U0001f30d  Traduire (fr ↔ en)", command=self.magie_traduire)
+        return menu
+
+    def ouvrir_menu_magie(self, event=None):
+        """Ouvre le menu : sous le bouton ✨ Magie, ou là où t'as cliqué à droite."""
+        self.montrer_document()
+        menu = self.construire_menu_magie()
+        if event is not None:
+            menu.tk_popup(event.x_root, event.y_root)
+        else:
+            b = self.bouton_magie
+            menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+        return "break"
+
+    def montrer_document(self):
+        """Sur l'écran d'accueil, le document est caché : les pouvoirs le font apparaître."""
+        if self.premiere_ligne and not self.en_animation:
+            self.premiere_ligne = False
+            if self.logo:
+                self.logo.glisser(vers_gauche=True)
+            self.descendre()
+
+    def clic_droit_document(self, event):
+        """Clic droit sur le texte : si rien n'est sélectionné, on sélectionne le mot sous la souris."""
+        if not self.document.tag_ranges("sel"):
+            self.document.mark_set("insert", f"@{event.x},{event.y}")
+        self.document.focus_set()
+        return self.ouvrir_menu_magie(event)
+
+    def texte_choisi(self):
+        """Ce sur quoi le pouvoir travaille : ta sélection, ou tout le texte si t'as rien choisi.
+
+        Rend (texte, début, fin) : les positions servent à remplacer le bon bout après.
+        """
+        zone = self.document.tag_ranges("sel")
+        if zone:
+            debut, fin = str(zone[0]), str(zone[1])
+        else:
+            debut, fin = "1.0", "end-1c"
+        return self.document.get(debut, fin).strip(), debut, fin
+
+    def moteur_local(self):
+        """Le modèle Ollama à utiliser pour les pouvoirs. Rend None si Ollama ne répond pas."""
+        choisi = self.moteurs.get(self.choix.get())
+        if choisi and choisi[0] == "ollama":
+            return choisi[1]        # celui que t'as choisi sous la boîte
+        for type_moteur, modele in self.moteurs.values():
+            if type_moteur == "ollama":
+                return modele       # sinon le premier modèle local qu'on trouve
+        return None
+
+    def pouvoir(self, titre, travail, fini, besoin_ollama=True):
+        """Fait rouler un pouvoir en arrière-plan, avec les 3 points qui sautent.
+
+        travail() roule dans un fil à part (l'app ne gèle pas).
+        fini(resultat) roule dans la fenêtre, une fois que c'est prêt.
+        """
+        if self.occupe_magie:
+            self.dire_magie("Un pouvoir travaille déjà. Attends qu'il finisse.")
+            return
+        if besoin_ollama and self.moteur_local() is None:
+            messagebox.showinfo("Magie", MESSAGE_OLLAMA, parent=self)
+            return
+        self.occupe_magie = True
+        self.nb_meteo += 1
+        etiquette = f"attente_magie{self.nb_meteo}"
+        self.document.see("end")
+        points = ajouter_ligne_attente(self.document, titre, TAILLE_AGENT, ("attente", etiquette))
+        generation = self.generation
+
+        def apres(resultat, err):
+            self.occupe_magie = False
+            if generation != self.generation:
+                points.destroy()
+                return              # on a changé de conversation entre-temps
+            enlever_ligne_attente(self.document, etiquette, points)
+            if err:
+                messagebox.showerror("Magie", self.message_magie(err), parent=self)
+                return
+            try:
+                fini(resultat)
+            except Exception as e:
+                messagebox.showerror("Magie", f"Ça n'a pas marché : {e}", parent=self)
+
+        self.en_arriere_plan(travail, apres)
+
+    def message_magie(self, err):
+        """Traduit une erreur technique en quelque chose qui se comprend."""
+        texte = str(err)
+        if isinstance(err, (urllib.error.URLError, ConnectionError, TimeoutError)) or \
+                "11434" in texte or "Connection refused" in texte:
+            return MESSAGE_OLLAMA
+        return f"Ça n'a pas marché : {texte}"
+
+    def dire_magie(self, message):
+        """Un mot dans le document, en petit, sans déranger la conversation."""
+        self.document.insert("end", message + "\n", "sources")
+        self.document.see("end")
+
+    def edition(self, action):
+        """Fait un changement sur le document en UN seul coup de Ctrl+Z.
+
+        Tkinter coupe l'annulation tout seul entre un effacement pis une insertion
+        (c'est son réglage « autoseparators »). Sans ça, le premier Ctrl+Z après un
+        remplacement effacerait le texte sans ramener l'ancien : le pire des deux
+        mondes. On éteint la coupure automatique le temps du changement.
+        """
+        d = self.document
+        d.edit_separator()
+        d.config(autoseparators=False)
+        try:
+            action()
+        finally:
+            d.config(autoseparators=True)
+            d.edit_separator()
+
+    def remplacer_choix(self, debut, fin, texte, note=""):
+        """Remplace le bout choisi. Un seul Ctrl+Z ramène l'ancien, le petit mot avec."""
+        def changer():
+            self.document.delete(debut, fin)
+            self.document.insert(debut, texte)
+            if note:
+                self.document.insert("end", note + "\n", "sources")
+
+        self.edition(changer)
+        self.document.see("end" if note else debut)
+
+    # --- 3. 🎭 Changer le style ---
+    def magie_style(self, style):
+        texte, debut, fin = self.texte_choisi()
+        if not texte:
+            self.dire_magie("Sélectionne le bout à réécrire (ou écris quelque chose).")
+            return
+        if len(texte) > 8000:
+            self.dire_magie("C'est un gros morceau. Sélectionne un bout plus court à réécrire.")
+            return
+        modele = self.moteur_local()
+        nom, consigne = next((nom, c) for cle, nom, c in STYLES if cle == style)
+
+        def fini(reecrit):
+            if not reecrit:
+                self.dire_magie("Le modèle n'a rien réécrit. Réessaie, ou prends un autre modèle.")
+                return
+            self.remplacer_choix(debut, fin, reecrit,
+                                 f"Réécrit en style {nom.lower()}. Ctrl+Z ramène ton texte d'avant.")
+
+        self.pouvoir(f"Je réécris en style {nom.lower()}",
+                     lambda: texte_par_ollama(modele, texte, "style", consigne), fini)
+
+    # --- 4. 📜 Résumer ---
+    def magie_resumer(self):
+        texte, _, fin = self.texte_choisi()
+        if not texte:
+            self.dire_magie("Écris ou sélectionne un texte à résumer.")
+            return
+        modele = self.moteur_local()
+        bout = texte[-12000:]
+
+        def fini(resume):
+            if not resume:
+                self.dire_magie("Le modèle n'a rien résumé. Réessaie, ou prends un autre modèle.")
+                return
+            # Le résumé s'ajoute SOUS le texte : on n'efface jamais ce que t'as écrit.
+            depart = self.document.index(fin)
+            self.edition(lambda: self.document.insert(depart, "\n\nRésumé :\n" + resume + "\n",
+                                                      "reponse"))
+            self.document.see(depart)
+
+        self.pouvoir("Je résume ton texte",
+                     lambda: texte_par_ollama(modele, bout, "resumer"), fini)
+
+    # --- Pouvoirs pas encore branchés (ils arrivent un par un) ---
+    def pas_encore(self, nom):
+        messagebox.showinfo("Magie", f"« {nom} » n'est pas encore branché. Ça s'en vient!",
+                            parent=self)
+
+    def magie_corriger(self):
+        self.pas_encore("Corriger les fautes")
+
+    def magie_dicter(self):
+        self.pas_encore("Dicter")
+
+    def magie_lire(self):
+        self.pas_encore("Lire à voix haute")
+
+    def magie_traduire(self):
+        self.pas_encore("Traduire")
+
+    # --- 1. ✨ Continuer mon texte ---
+    def magie_continuer(self):
+        texte, _, fin = self.texte_choisi()
+        if not texte:
+            self.dire_magie("Écris d'abord quelque chose, pis je continuerai.")
+            return
+        modele = self.moteur_local()
+        bout = texte[-6000:]        # un modèle local n'avale pas un roman d'un coup
+
+        def fini(suite):
+            if not suite:
+                self.dire_magie("Le modèle n'a rien écrit. Réessaie, ou prends un autre modèle.")
+                return
+            depart = self.document.index(fin)
+            separateur = "" if self.document.get(f"{depart}-1c", depart) in ("\n", "") else " "
+            self.edition(lambda: self.document.insert(depart, separateur + suite + "\n", "reponse"))
+            self.document.see(depart)
+
+        self.pouvoir(f"{nom_court(('ollama', modele))} écrit la suite",
+                     lambda: texte_par_ollama(modele, bout, "continuer"), fini)
     # ---------- Images ----------
     def bouton_image(self, parent, commande):
         return tk.Button(parent, text="+ Image", command=commande, bg=ORANGE, fg=NOIR,
