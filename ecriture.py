@@ -91,7 +91,15 @@ COULEURS_CODE = {
 }
 
 # ---------- Réglages des IA et de GitHub ----------
-MODELE_CLAUDE = "claude-sonnet-5"
+MODELE_CLAUDE = "claude-sonnet-5"   # celui choisi au démarrage
+# Les modèles Claude offerts dans le menu. Prix par million de mots-jetons (entrée / sortie).
+MODELES_CLAUDE = (
+    ("claude-opus-5",    "Opus 5",    "le plus capable",            "5 $ / 25 $"),
+    ("claude-sonnet-5",  "Sonnet 5",  "bon partout, moins cher",    "2 $ / 10 $"),
+    ("claude-haiku-4-5", "Haiku 4.5", "le plus rapide et le moins cher", "1 $ / 5 $"),
+    ("claude-fable-5-1", "Fable 5.1", "pour les tâches longues",    "10 $ / 50 $"),
+)
+_modeles_claude_en_ligne = []   # rempli par l'API quand une clé est branchée
 URL_CLAUDE = "https://api.anthropic.com/v1/messages"
 URL_OLLAMA = "http://localhost:11434"
 URL_GITHUB = "https://api.github.com"
@@ -142,7 +150,7 @@ def instructions_systeme(web):
     else:
         texte += ("Tu n'as pas accès à Internet. Si la question demande des infos récentes "
                   "(actualité, météo, prix, horaires), dis-le franchement au lieu d'inventer "
-                  f"et suggère de choisir « {NOM_CLAUDE} » dans le menu. ")
+                  "et suggère de choisir un des Claude dans le menu sous la boîte. ")
     texte += (
         "Quand ta réponse explique un plan d'action ou des étapes à suivre, termine-la "
         "par un bloc exactement comme celui-ci (une étape courte par ligne, moins de 12 mots) :\n"
@@ -182,19 +190,6 @@ def enregistrer_secret(fichier, valeur):
     os.chmod(fichier, 0o600)
 
 
-def effacer_secret(fichier):
-    fichier.unlink(missing_ok=True)
-
-
-def etat_secret(fichier, variable_env):
-    """Dit si c'est branché, et d'où ça vient — sans jamais montrer la valeur."""
-    if fichier.exists() and fichier.read_text(encoding="utf-8").strip():
-        return True, "branché ✓   (enregistré sur cet ordi)"
-    if os.environ.get(variable_env, "").strip():
-        return True, f"branché ✓   (par la variable {variable_env})"
-    return False, "pas encore branché"
-
-
 # ---------- Ollama (gratuit, local) ----------
 def modeles_ollama():
     """Liste les modèles installés dans Ollama (vide si Ollama roule pas)."""
@@ -216,12 +211,44 @@ def ollama_repond():
         return False
 
 
+def modeles_claude_en_ligne(cle):
+    """Demande à l'API la liste des modèles que CETTE clé peut utiliser."""
+    requete = urllib.request.Request(
+        "https://api.anthropic.com/v1/models?limit=100",
+        headers={"x-api-key": cle, "anthropic-version": "2023-06-01"})
+    with urllib.request.urlopen(requete, timeout=10) as rep:
+        data = json.loads(rep.read().decode("utf-8"))
+    return [(m["id"], m.get("display_name") or m["id"]) for m in data.get("data", [])]
+
+
+def modeles_claude():
+    """(identifiant, nom, note) pour chaque Claude offert."""
+    if _modeles_claude_en_ligne:
+        connus = {i: (n, p) for i, _, n, p in MODELES_CLAUDE}
+        return [(i, nom.replace("Claude ", ""), *connus.get(i, ("", "")))
+                for i, nom in _modeles_claude_en_ligne]
+    return [(i, nom, note, prix) for i, nom, note, prix in MODELES_CLAUDE]
+
+
+def nom_court(moteur):
+    """Le nom à montrer pendant que ça réfléchit."""
+    type_moteur, modele = moteur
+    if type_moteur != "claude":
+        return modele.removesuffix(":latest")
+    for identifiant, nom, *_ in modeles_claude():
+        if identifiant == modele:
+            return f"Claude {nom}"
+    return "Claude"
+
+
 def trouver_moteurs():
-    """Les IA du menu : les modèles Ollama gratuits en premier, Claude à la fin."""
+    """Les IA du menu : les modèles Ollama gratuits en premier, les Claude ensuite."""
     moteurs = {}
     for nom in modeles_ollama():
         moteurs[f"{nom.removesuffix(':latest')} (gratuit)"] = ("ollama", nom)
-    moteurs[NOM_CLAUDE] = ("claude", MODELE_CLAUDE)
+    for identifiant, nom, note, prix in modeles_claude():
+        detail = f" — {note}" if note else ""
+        moteurs[f"Claude {nom} + web{detail}"] = ("claude", identifiant)
     return moteurs
 
 
@@ -245,12 +272,13 @@ def appeler_ollama(modele, messages, systeme, num_ctx=None):
 
 
 # ---------- Claude (payant, avec recherche web) ----------
-def appeler_claude(cle, messages, systeme, web=True, max_tokens=2048, timeout=180):
+def appeler_claude(cle, messages, systeme, web=True, max_tokens=2048, timeout=180,
+                   modele=None):
     conversation = list(messages)
     morceaux, sources = [], []
     for _ in range(5):
         corps = {
-            "model": MODELE_CLAUDE,
+            "model": modele or MODELE_CLAUDE,
             "max_tokens": max_tokens,
             "system": systeme,
             "messages": conversation,
@@ -296,8 +324,7 @@ def message_erreur(err, type_moteur, modele):
                 return f"Le modèle « {modele} » n'est pas installé. Dans un terminal : ollama pull {modele}"
             return f"Ollama a renvoyé l'erreur {err.code} : {detail or err.reason}"
         if err.code == 401:
-            return ("Clé API invalide. Ouvre « Paramètres » dans le menu de gauche "
-                    "pour la changer.")
+            return "Clé API invalide. Change-la dans Paramètres (menu ☰, tout en bas)."
         if err.code == 429:
             return "Trop de questions d'un coup. Attends quelques secondes et réessaie."
         if err.code in (500, 529):
@@ -349,7 +376,7 @@ def lire_blob(depot, sha, token):
 def erreur_github(err):
     if isinstance(err, urllib.error.HTTPError):
         if err.code == 401:
-            return "Token GitHub invalide ou expiré. Clique sur « Token GitHub » pour le changer."
+            return "Token GitHub invalide ou expiré. Change-le dans Paramètres (menu ☰, tout en bas)."
         if err.code == 403:
             return ("GitHub refuse : le token n'a pas la permission (Contents : Read and write) "
                     "ou la limite de requêtes est atteinte.")
@@ -859,127 +886,6 @@ class IAGratuites(tk.Toplevel):
         self.destroy()
 
 
-class Parametres(tk.Toplevel):
-    """Une seule place pour brancher la clé Claude pis le token GitHub."""
-
-    CHAMPS = (
-        ("Clé API Claude", FICHIER_CLE, "ANTHROPIC_API_KEY",
-         "Pour l'IA payante avec recherche web. Crée-la sur console.anthropic.com."),
-        ("Token GitHub", FICHIER_TOKEN, "GITHUB_TOKEN",
-         "Pour le Codex. Fine-grained token, permission « Contents : Read and write »."),
-    )
-
-    def __init__(self, app):
-        super().__init__(app, bg=GRIS_FOND, padx=24, pady=20)
-        self.app = app
-        self.title("Paramètres")
-        self.resizable(False, False)
-        self.transient(app)
-        self.protocol("WM_DELETE_WINDOW", self.fermer)
-        self.bind("<Escape>", lambda e: self.fermer())
-        self.lignes = []
-
-        tk.Label(self, text="Paramètres", bg=GRIS_FOND, fg=NOIR,
-                 font=(FAMILLE, 16, "bold")).pack(anchor="w")
-        tk.Label(self, bg=GRIS_FOND, fg=NOIR, justify="left", font=(FAMILLE, 10),
-                 text=f"Les deux restent sur ton ordi, dans {DOSSIER_CONFIG},\n"
-                      "en lecture seule pour ton compte. Rien part ailleurs.").pack(
-            anchor="w", pady=(2, 16))
-
-        for titre, fichier, variable, aide in self.CHAMPS:
-            self.construire_champ(titre, fichier, variable, aide)
-
-        self.montrer = tk.BooleanVar(value=False)
-        tk.Checkbutton(self, text="Montrer ce que je tape", variable=self.montrer,
-                       command=self.basculer_masque, bg=GRIS_FOND, fg=NOIR,
-                       activebackground=GRIS_FOND, activeforeground=NOIR,
-                       selectcolor=GRIS_ZONE, font=(FAMILLE, 10), bd=0,
-                       highlightthickness=0, cursor="hand2").pack(anchor="w", pady=(4, 2))
-
-        self.mot = tk.Label(self, text="Laisse un champ vide pour ne pas y toucher.",
-                            bg=GRIS_FOND, fg=NOIR, font=(FAMILLE, 10), anchor="w")
-        self.mot.pack(fill="x", pady=(8, 10))
-
-        rang = tk.Frame(self, bg=GRIS_FOND)
-        rang.pack(fill="x")
-        bouton_orange(rang, "Enregistrer", self.enregistrer).pack(side="right")
-        bouton_orange(rang, "Fermer", self.fermer).pack(side="right", padx=(0, 10))
-        bouton_orange(rang, "IA gratuites…", self.app.ouvrir_ia_gratuites,
-                      taille=9).pack(side="left")
-
-        self.update_idletasks()
-        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2
-        y = app.winfo_rooty() + (app.winfo_height() - self.winfo_height()) // 3
-        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-        self.lignes[0][1].focus_set()
-
-    def construire_champ(self, titre, fichier, variable, aide):
-        haut = tk.Frame(self, bg=GRIS_FOND)
-        haut.pack(fill="x")
-        tk.Label(haut, text=titre, bg=GRIS_FOND, fg=NOIR,
-                 font=(FAMILLE, 12, "bold")).pack(side="left")
-        etat = tk.Label(haut, bg=GRIS_FOND, font=(FAMILLE, 10))
-        etat.pack(side="right")
-        tk.Label(self, text=aide, bg=GRIS_FOND, fg=NOIR, font=(FAMILLE, 10),
-                 wraplength=430, justify="left").pack(anchor="w", pady=(1, 5))
-
-        rang = tk.Frame(self, bg=GRIS_FOND)
-        rang.pack(fill="x", pady=(0, 14))
-        champ = tk.Entry(rang, show="•", width=42, bg=GRIS_ZONE, fg=NOIR,
-                         insertbackground=NOIR, selectbackground=ORANGE,
-                         selectforeground=NOIR, font=(FAMILLE, 12), relief="flat", bd=0,
-                         highlightthickness=2, highlightbackground=GRIS_BORD,
-                         highlightcolor=ORANGE)
-        champ.pack(side="left", fill="x", expand=True, ipady=6, ipadx=8)
-        champ.bind("<Return>", lambda e: self.enregistrer())
-        bouton_orange(rang, "Effacer", lambda: self.effacer(fichier, variable),
-                      taille=9).pack(side="right", padx=(10, 0))
-        self.lignes.append((fichier, champ, etat, variable))
-        self.rafraichir_etat()
-
-    def rafraichir_etat(self):
-        for fichier, _, etiquette, variable in self.lignes:
-            branche, texte = etat_secret(fichier, variable)
-            etiquette.config(text=texte, fg="#1d5e00" if branche else "#6b2200")
-
-    def basculer_masque(self):
-        for _, champ, _, _ in self.lignes:
-            champ.config(show="" if self.montrer.get() else "•")
-
-    def effacer(self, fichier, variable):
-        if not fichier.exists():
-            if os.environ.get(variable, "").strip():
-                messagebox.showinfo(
-                    "Effacer", f"Rien à effacer ici : la valeur vient de la variable "
-                               f"{variable}, pas d'un fichier.", parent=self)
-            return
-        if messagebox.askyesno("Effacer", f"Effacer ce qui est enregistré dans\n{fichier} ?",
-                               parent=self):
-            effacer_secret(fichier)
-            self.rafraichir_etat()
-            self.app.secrets_changes()
-
-    def enregistrer(self):
-        changes = []
-        for fichier, champ, _, _ in self.lignes:
-            valeur = champ.get().strip()
-            if valeur:
-                enregistrer_secret(fichier, valeur)
-                champ.delete(0, "end")
-                changes.append(fichier)
-        self.rafraichir_etat()
-        if changes:
-            self.app.secrets_changes()
-            self.mot.config(text="C'est enregistré." if len(changes) == 1
-                            else "Les deux sont enregistrés.")
-        else:
-            self.mot.config(text="Rien à enregistrer : les deux champs sont vides.")
-
-    def fermer(self):
-        self.app.fenetre_parametres = None
-        self.destroy()
-
-
 # ---------- Le logo de l'agent ----------
 class LogoAgent:
     """Le logo Marceau : au centre au début, il glisse à gauche quand l'agent commence à répondre."""
@@ -1220,7 +1126,7 @@ class CodexVue(tk.Frame):
         if self.token:
             self.etat("Choisis un projet GitHub en haut pour commencer.")
         else:
-            self.etat("Ajoute ton token GitHub (bouton « Token ») pour ouvrir tes projets.")
+            self.etat("Ajoute ton token GitHub dans Paramètres (menu ☰, tout en bas) pour ouvrir tes projets.")
 
     # ----- Construction -----
     def construire_barre(self):
@@ -1234,7 +1140,6 @@ class CodexVue(tk.Frame):
         bouton_orange(barre, "Scanner", self.scanner).pack(side="left", padx=(10, 0), pady=13)
         bouton_orange(barre, "Enregistrer", self.enregistrer_tout).pack(side="left", padx=(10, 0), pady=13)
         bouton_orange(barre, "Fermer", self.app.fermer_codex).pack(side="right", padx=(10, 18), pady=13)
-        bouton_orange(barre, "Token", self.demander_token).pack(side="right", padx=(10, 0), pady=13)
         self.bouton_assistant = bouton_orange(barre, "Assistant", lambda: self.basculer("assistant"))
         self.bouton_assistant.pack(side="right", padx=(10, 0), pady=13)
         self.bouton_fichiers = bouton_orange(barre, "Fichiers", lambda: self.basculer("fichiers"))
@@ -1325,24 +1230,18 @@ class CodexVue(tk.Frame):
         self.app.animer(quel, depart, largeur if ouvrir else 1,
                         lambda v: p.config(width=max(1, int(v))), fini, etapes=14)
 
-    # ----- GitHub : token et projets -----
-    def demander_token(self):
-        token = simpledialog.askstring(
-            "Token GitHub",
-            "Colle ton token GitHub.\n\nCrée-le sur github.com : Settings > Developer settings >\n"
-            "Personal access tokens > Fine-grained tokens,\n"
-            "avec la permission « Contents : Read and write ».",
-            show="*", parent=self)
-        if not token or not token.strip():
-            return False
-        enregistrer_secret(FICHIER_TOKEN, token.strip())
-        self.token = token.strip()
+    # ----- GitHub : projets -----
+    def nouveau_token(self, token):
+        """Appelé par Paramètres quand le token change."""
+        self.token = token
         self.depots = []
-        self.etat("Token enregistré. Choisis un projet en haut.")
-        return True
+        self.etat("Token enregistré. Choisis un projet en haut." if token else
+                  "Plus de token GitHub. Ajoutes-en un dans Paramètres pour ouvrir tes projets.")
 
     def menu_projets(self):
-        if not self.token and not self.demander_token():
+        if not self.token:
+            self.etat("Ajoute d'abord ton token GitHub dans Paramètres.")
+            self.app.ouvrir_parametres("github")
             return
         if self.depots:
             self.afficher_menu_projets()
@@ -1678,8 +1577,10 @@ class CodexVue(tk.Frame):
         type_moteur, modele = moteur
         cle = ""
         if type_moteur == "claude":
-            cle = lire_secret(FICHIER_CLE, "ANTHROPIC_API_KEY") or self.app.demander_cle()
+            cle = lire_secret(FICHIER_CLE, "ANTHROPIC_API_KEY")
             if not cle:
+                self.etat("Ajoute ta clé API Claude dans Paramètres, pis renvoie ta demande.")
+                self.app.ouvrir_parametres("claude")
                 return "break"
         self.saisie.delete("1.0", "end")
         if not self.messages:
@@ -1691,7 +1592,7 @@ class CodexVue(tk.Frame):
             envoi.pop(0)
         budget = CONTEXTE_CLAUDE if type_moteur == "claude" else CONTEXTE_OLLAMA
         envoi[-1]["content"] = self.contexte(budget) + "\n\nDemande : " + question
-        nom = "Claude" if type_moteur == "claude" else modele.removesuffix(":latest")
+        nom = nom_court(moteur)
         self.chat.insert("end", f"Codex ({nom}) travaille…\n", "attente")
         self.chat.see("end")
         self.occupe = True
@@ -1699,7 +1600,8 @@ class CodexVue(tk.Frame):
 
         def travail():
             if type_moteur == "claude":
-                return appeler_claude(cle, envoi, systeme, web=False, max_tokens=16000, timeout=600)[0]
+                return appeler_claude(cle, envoi, systeme, web=False, max_tokens=16000,
+                                      timeout=600, modele=modele)[0]
             return appeler_ollama(modele, envoi, systeme, num_ctx=CTX_OLLAMA_CODEX)[0]
 
         self.app.en_arriere_plan(travail, lambda t, err: self.reponse(t, err, type_moteur, modele))
@@ -1778,15 +1680,15 @@ class AppEcriture(tk.Tk):
         self.question_en_cours = ""
         self.menu_ouvert = False
         self.menu_x = -LARGEUR_MENU
+        self.page_x = 0              # 0 = page principale du menu, -LARGEUR_MENU = Paramètres
+        self.champs = {}
         self.codex = None
-        self.fenetre_parametres = None
         self.fenetre_ia = None
         self.boutons_moteur = []
         self.ids_sessions = []
 
         # --- Boutons du haut (cachés au début) ---
         self.barre = tk.Frame(self, bg=GRIS_FOND)
-        bouton_orange(self.barre, "Paramètres", self.ouvrir_parametres).pack(side="left", padx=(0, 10))
         bouton_orange(self.barre, "Sauvegarder", self.sauvegarder).pack(side="left", padx=(0, 10))
         bouton_orange(self.barre, "Nouveau", self.nouveau).pack(side="left")
 
@@ -1827,6 +1729,7 @@ class AppEcriture(tk.Tk):
         self.saisie.bind("<Return>", self.envoyer)
         self.saisie.bind("<Shift-Return>", self.saut_de_ligne)
         self.bind("<Control-s>", self.ctrl_s)
+        self.bind("<Escape>", lambda e: self.fermer_menu())
         self.protocol("WM_DELETE_WINDOW", self.quitter)
 
         self.centrer_saisie()
@@ -1834,6 +1737,7 @@ class AppEcriture(tk.Tk):
             self.logo.au_centre()
         self.saisie.focus_set()
         self.after(80, self.traiter_taches)
+        self.after(300, self.charger_modeles_claude)
 
     # ---------- Outils ----------
     def configurer_tags(self, widget, taille=14, retrait=0):
@@ -1943,12 +1847,16 @@ class AppEcriture(tk.Tk):
         if relire:
             self.moteurs = trouver_moteurs()
         menu.delete(0, "end")
-        if not any(e != NOM_CLAUDE for e in self.moteurs):
+        gratuits = [e for e, v in self.moteurs.items() if v[0] == "ollama"]
+        if not gratuits:
             # Rien de gratuit : on le dit, au lieu de laisser Claude tout seul sans explication
             menu.add_command(label="Aucune IA gratuite trouvée sur cet ordi", state="disabled")
-            menu.add_separator()
-        for etiquette in self.moteurs:
+        for etiquette in gratuits:
             menu.add_command(label=etiquette, command=lambda e=etiquette: self.choix.set(e))
+        menu.add_separator()
+        for etiquette, valeur in self.moteurs.items():
+            if valeur[0] == "claude":
+                menu.add_command(label=etiquette, command=lambda e=etiquette: self.choix.set(e))
         menu.add_separator()
         menu.add_command(label="Ajouter des IA gratuites…", command=self.ouvrir_ia_gratuites)
         if self.choix.get() not in self.moteurs:
@@ -1958,25 +1866,50 @@ class AppEcriture(tk.Tk):
         for bouton in self.boutons_moteur:
             bouton.config(text=f"{self.choix.get()}  ▾")
 
+    def ouvrir_ia_gratuites(self):
+        if self.fenetre_ia is not None and self.fenetre_ia.winfo_exists():
+            self.fenetre_ia.lift()
+            self.fenetre_ia.focus_set()
+        else:
+            self.fenetre_ia = IAGratuites(self)
+        self.fermer_menu()
+
+    def charger_modeles_claude(self):
+        """Si une clé est branchée, on remplace la liste d'en haut par celle de l'API."""
+        cle = lire_secret(FICHIER_CLE, "ANTHROPIC_API_KEY")
+        if not cle:
+            return
+
+        def recu(liste, err):
+            global _modeles_claude_en_ligne
+            if err or not liste:
+                return   # pas grave : on garde la liste écrite dans le fichier
+            _modeles_claude_en_ligne = liste
+            self.rafraichir_moteurs_partout()
+
+        self.en_arriere_plan(lambda: modeles_claude_en_ligne(cle), recu)
+
+    def rafraichir_moteurs_partout(self):
+        """Relit Ollama et remet les noms à jour sur tous les boutons de choix."""
+        self.moteurs = trouver_moteurs()
+        if self.choix.get() not in self.moteurs:
+            self.choix.set(next(iter(self.moteurs)))
+        self.maj_boutons_moteur()
+
     # ---------- Menu de gauche ----------
     def construire_menu_lateral(self):
         m = self.menu_lateral = tk.Frame(self, bg=GRIS_MENU)
         m.place(x=self.menu_x, y=0, width=LARGEUR_MENU, relheight=1)
-        tk.Frame(m, bg="#5e5e5e", width=2).place(relx=1, x=-2, y=0, relheight=1)
-        bouton_orange(m, "+ Nouvelle conversation", self.nouveau).pack(fill="x", padx=14, pady=(70, 12))
-        tk.Label(m, text="Conversations", bg=GRIS_MENU, fg=NOIR, anchor="w",
-                 font=(FAMILLE, 10, "bold")).pack(fill="x", padx=16)
-        # packés « side=bottom » : le premier va tout en bas
-        bouton_orange(m, "Paramètres  ⚙", self.ouvrir_parametres).pack(
-            side="bottom", fill="x", padx=14, pady=(0, 14))
-        bouton_orange(m, "Codex  </>", self.ouvrir_codex).pack(
-            side="bottom", fill="x", padx=14, pady=(14, 8))
-        self.liste_sessions = tk.Listbox(
-            m, bg=GRIS_MENU, fg=NOIR, selectbackground=ORANGE, selectforeground=NOIR,
-            font=(FAMILLE, 11), relief="flat", bd=0, highlightthickness=0, activestyle="none")
-        self.liste_sessions.pack(fill="both", expand=True, padx=(8, 10), pady=6)
-        self.liste_sessions.bind("<<ListboxSelect>>", self.sur_choix_session)
-        self.liste_sessions.bind("<Button-3>", self.menu_session)
+        # Deux pages côte à côte : le menu principal pis Paramètres (qui glisse par-dessus)
+        self.page_principale = tk.Frame(m, bg=GRIS_MENU)
+        self.page_principale.place(x=0, y=0, width=LARGEUR_MENU, relheight=1)
+        self.page_parametres = tk.Frame(m, bg=GRIS_MENU)
+        self.page_parametres.place(x=LARGEUR_MENU, y=0, width=LARGEUR_MENU, relheight=1)
+        self.construire_page_principale(self.page_principale)
+        self.construire_page_parametres(self.page_parametres)
+        bord = tk.Frame(m, bg="#5e5e5e", width=2)
+        bord.place(relx=1, x=-2, y=0, relheight=1)
+        bord.lift()
 
         self.bouton_menu = tk.Button(
             self, text="☰", command=self.basculer_menu, bg=ORANGE, fg=NOIR,
@@ -1984,10 +1917,145 @@ class AppEcriture(tk.Tk):
             relief="flat", bd=0, highlightthickness=0, cursor="hand2")
         self.bouton_menu.place(x=15, y=14, width=46, height=38)
 
+    def bouton_nav(self, parent, texte, commande):
+        return tk.Button(parent, text=texte, command=commande, anchor="w", bg=GRIS_INACTIF, fg=NOIR,
+                         activebackground=ORANGE_FONCE, activeforeground=NOIR,
+                         font=(FAMILLE, 12, "bold"), relief="flat", bd=0, highlightthickness=0,
+                         padx=16, pady=9, cursor="hand2")
+
+    def separateur(self, parent, **pack):
+        tk.Frame(parent, bg="#5e5e5e", height=2).pack(fill="x", padx=14, **pack)
+
+    def construire_page_principale(self, p):
+        tk.Frame(p, bg=GRIS_MENU, height=70).pack(fill="x")   # la place du bouton ☰
+        self.nav_chat = self.bouton_nav(p, "Chat", self.aller_chat)
+        self.nav_chat.pack(fill="x", padx=14, pady=(0, 6))
+        self.nav_codex = self.bouton_nav(p, "Codex  </>", self.ouvrir_codex)
+        self.nav_codex.pack(fill="x", padx=14)
+        self.separateur(p, pady=14)
+        bouton_orange(p, "+ Nouvelle conversation", self.nouveau).pack(fill="x", padx=14, pady=(0, 12))
+        tk.Label(p, text="Conversations", bg=GRIS_MENU, fg=NOIR, anchor="w",
+                 font=(FAMILLE, 10, "bold")).pack(fill="x", padx=16)
+        # Paramètres reste collé tout en bas
+        bouton_orange(p, "Paramètres", lambda: self.aller_page("parametres")).pack(
+            side="bottom", fill="x", padx=14, pady=14)
+        self.separateur(p, side="bottom")
+        self.liste_sessions = tk.Listbox(
+            p, bg=GRIS_MENU, fg=NOIR, selectbackground=ORANGE, selectforeground=NOIR,
+            font=(FAMILLE, 11), relief="flat", bd=0, highlightthickness=0, activestyle="none")
+        self.liste_sessions.pack(fill="both", expand=True, padx=(8, 10), pady=6)
+        self.liste_sessions.bind("<<ListboxSelect>>", self.sur_choix_session)
+        self.liste_sessions.bind("<Button-3>", self.menu_session)
+        self.maj_navigation()
+
+    def construire_page_parametres(self, p):
+        tk.Frame(p, bg=GRIS_MENU, height=70).pack(fill="x")
+        haut = tk.Frame(p, bg=GRIS_MENU)
+        haut.pack(fill="x", padx=14, pady=(0, 6))
+        bouton_orange(haut, "‹ Retour", lambda: self.aller_page("principale"), taille=9).pack(side="left")
+        tk.Label(haut, text="Paramètres", bg=GRIS_MENU, fg=NOIR,
+                 font=(FAMILLE, 13, "bold")).pack(side="left", padx=12)
+        self.separateur(p, pady=(8, 4))
+        reglages = [
+            ("claude", "Clé API Claude", FICHIER_CLE, "ANTHROPIC_API_KEY",
+             "Pour « Claude + web ». Crée ta clé sur console.anthropic.com."),
+            ("github", "Token GitHub", FICHIER_TOKEN, "GITHUB_TOKEN",
+             "Pour le Codex. Sur github.com : Settings > Developer settings > Fine-grained "
+             "tokens, avec la permission « Contents : Read and write »."),
+        ]
+        for quoi, titre, fichier, variable, aide in reglages:
+            tk.Label(p, text=titre, bg=GRIS_MENU, fg=NOIR, anchor="w",
+                     font=(FAMILLE, 11, "bold")).pack(fill="x", padx=16, pady=(12, 2))
+            statut = tk.Label(p, bg=GRIS_MENU, fg=NOIR, anchor="w", justify="left",
+                              font=(FAMILLE, 9), wraplength=LARGEUR_MENU - 36)
+            statut.pack(fill="x", padx=16)
+            entree = tk.Entry(p, show="•", bg=GRIS_ZONE, fg=NOIR, insertbackground=NOIR,
+                              relief="flat", bd=0, font=(FAMILLE, 11), highlightthickness=2,
+                              highlightbackground=GRIS_BORD, highlightcolor=ORANGE)
+            entree.pack(fill="x", padx=16, pady=(6, 6), ipady=5)
+            entree.bind("<Return>", lambda e, q=quoi: self.enregistrer_parametre(q))
+            rang = tk.Frame(p, bg=GRIS_MENU)
+            rang.pack(fill="x", padx=16)
+            bouton_orange(rang, "Enregistrer", lambda q=quoi: self.enregistrer_parametre(q),
+                          taille=9).pack(side="left")
+            bouton_orange(rang, "Supprimer", lambda q=quoi: self.supprimer_parametre(q),
+                          taille=9).pack(side="left", padx=(8, 0))
+            tk.Label(p, text=aide, bg=GRIS_MENU, fg="#2e2e2e", anchor="w", justify="left",
+                     font=(FAMILLE, 9), wraplength=LARGEUR_MENU - 36).pack(fill="x", padx=16, pady=(6, 4))
+            self.champs[quoi] = {"titre": titre, "fichier": fichier, "variable": variable,
+                                 "statut": statut, "entree": entree}
+        self.separateur(p, pady=(10, 0))
+        bouton_orange(p, "Ajouter des IA gratuites…", self.ouvrir_ia_gratuites, taille=9).pack(
+            fill="x", padx=16, pady=(10, 0))
+        self.maj_statuts()
+
+    def aller_page(self, nom):
+        """Fait glisser le menu vers une page : « principale » ou « parametres »."""
+        if nom == "parametres":
+            self.maj_statuts()
+
+        def appliquer(v):
+            self.page_x = int(v)
+            self.page_principale.place_configure(x=self.page_x)
+            self.page_parametres.place_configure(x=self.page_x + LARGEUR_MENU)
+
+        self.animer("pages", self.page_x, 0 if nom == "principale" else -LARGEUR_MENU,
+                    appliquer, etapes=14)
+
+    # ---------- Paramètres : clé API et token ----------
+    def maj_statuts(self):
+        for quoi, c in self.champs.items():
+            cle = quoi == "claude"
+            valeur = c["fichier"].read_text(encoding="utf-8").strip() if c["fichier"].exists() else ""
+            if valeur:
+                texte = f"{'Clé enregistrée' if cle else 'Token enregistré'} (finit par {valeur[-4:]})"
+            elif os.environ.get(c["variable"]):
+                texte = f"Vient de la variable {c['variable']}"
+            else:
+                texte = "Aucune clé enregistrée" if cle else "Aucun token enregistré"
+            c["statut"].config(text=texte)
+
+    def enregistrer_parametre(self, quoi):
+        c = self.champs[quoi]
+        valeur = c["entree"].get().strip()
+        if not valeur:
+            c["statut"].config(text="Colle d'abord la valeur dans la case.")
+            c["entree"].focus_set()
+            return
+        enregistrer_secret(c["fichier"], valeur)
+        c["entree"].delete(0, "end")
+        self.maj_statuts()
+        if quoi == "github" and self.codex is not None:
+            self.codex.nouveau_token(valeur)
+        if quoi == "claude":
+            self.charger_modeles_claude()
+
+    def supprimer_parametre(self, quoi):
+        c = self.champs[quoi]
+        if not c["fichier"].exists():
+            self.maj_statuts()
+            return
+        if not messagebox.askyesno("Supprimer", f"Supprimer {c['titre'].lower()} de cet ordi?"):
+            return
+        c["fichier"].unlink(missing_ok=True)
+        self.maj_statuts()
+        if quoi == "github" and self.codex is not None:
+            self.codex.nouveau_token(lire_secret(FICHIER_TOKEN, "GITHUB_TOKEN"))
+
+    def ouvrir_parametres(self, focus=None):
+        """Ouvre le menu directement sur Paramètres (ex. : quand la clé manque)."""
+        if not self.menu_ouvert:
+            self.basculer_menu()
+        self.aller_page("parametres")
+        if focus in self.champs:
+            self.champs[focus]["entree"].focus_set()
+
+    # ---------- Ouvrir / fermer le menu ----------
     def basculer_menu(self):
         self.menu_ouvert = not self.menu_ouvert
         if self.menu_ouvert:
             self.rafraichir_sessions()
+            self.maj_navigation()
             self.menu_lateral.lift()
             self.bouton_menu.lift()
 
@@ -1995,7 +2063,25 @@ class AppEcriture(tk.Tk):
             self.menu_x = int(v)
             self.menu_lateral.place_configure(x=self.menu_x)
 
-        self.animer("menu", self.menu_x, 0 if self.menu_ouvert else -LARGEUR_MENU, appliquer, etapes=16)
+        def apres():
+            if not self.menu_ouvert and self.page_x != 0:   # la prochaine fois : page principale
+                self.annuler_animation("pages")
+                self.page_x = 0
+                self.page_principale.place_configure(x=0)
+                self.page_parametres.place_configure(x=LARGEUR_MENU)
+
+        self.animer("menu", self.menu_x, 0 if self.menu_ouvert else -LARGEUR_MENU, appliquer,
+                    apres, etapes=16)
+
+    def maj_navigation(self):
+        codex = self.codex_visible()
+        self.nav_chat.config(bg=GRIS_INACTIF if codex else ORANGE)
+        self.nav_codex.config(bg=ORANGE if codex else GRIS_INACTIF)
+
+    def aller_chat(self):
+        self.fermer_codex()
+        self.fermer_menu()
+        self.saisie.focus_set()
 
     def fermer_menu(self):
         if self.menu_ouvert:
@@ -2122,11 +2208,13 @@ class AppEcriture(tk.Tk):
         self.codex.lift()
         self.menu_lateral.lift()
         self.bouton_menu.lift()
+        self.maj_navigation()
         self.fermer_menu()
 
     def fermer_codex(self):
         if self.codex is not None:
             self.codex.place_forget()
+        self.maj_navigation()
 
     def codex_visible(self):
         return self.codex is not None and bool(self.codex.winfo_manager())
@@ -2186,15 +2274,16 @@ class AppEcriture(tk.Tk):
             return "break"
         cle = ""
         if moteur[0] == "claude":
-            cle = lire_secret(FICHIER_CLE, "ANTHROPIC_API_KEY") or self.demander_cle()
+            cle = lire_secret(FICHIER_CLE, "ANTHROPIC_API_KEY")
             if not cle:
+                self.ouvrir_parametres("claude")   # ta question reste dans la boîte
                 return "break"
 
         self.saisie.delete("1.0", "end")
         self.document.insert("end", texte + "\n", "question")
         self.messages.append({"role": "user", "content": texte})
         self.question_en_cours = texte
-        nom = "Claude" if moteur[0] == "claude" else moteur[1].removesuffix(":latest")
+        nom = nom_court(moteur)
         self.montrer_attente(nom)
         self.occupe = True
         threading.Thread(target=self.travail, args=(moteur, cle, self.historique_api(), self.generation),
@@ -2214,7 +2303,8 @@ class AppEcriture(tk.Tk):
         type_moteur, modele = moteur
         try:
             if type_moteur == "claude":
-                texte, sources = appeler_claude(cle, historique, instructions_systeme(web=True))
+                texte, sources = appeler_claude(cle, historique, instructions_systeme(web=True),
+                                                modele=modele)
             else:
                 texte, sources = appeler_ollama(modele, historique, instructions_systeme(web=False))
             self.resultats.put((generation, "ok", texte, sources))
@@ -2306,45 +2396,6 @@ class AppEcriture(tk.Tk):
     def saut_de_ligne(self, event=None):
         self.saisie.insert("insert", "\n")
         return "break"
-
-    # ---------- Paramètres ----------
-    def ouvrir_parametres(self):
-        if self.fenetre_parametres is not None and self.fenetre_parametres.winfo_exists():
-            self.fenetre_parametres.lift()
-            self.fenetre_parametres.focus_set()
-        else:
-            self.fenetre_parametres = Parametres(self)
-        self.fermer_menu()
-
-    def ouvrir_ia_gratuites(self):
-        if self.fenetre_ia is not None and self.fenetre_ia.winfo_exists():
-            self.fenetre_ia.lift()
-            self.fenetre_ia.focus_set()
-        else:
-            self.fenetre_ia = IAGratuites(self)
-        self.fermer_menu()
-
-    def rafraichir_moteurs_partout(self):
-        """Relit Ollama et remet les noms à jour sur tous les boutons de choix."""
-        self.moteurs = trouver_moteurs()
-        if self.choix.get() not in self.moteurs:
-            self.choix.set(next(iter(self.moteurs)))
-        self.maj_boutons_moteur()
-
-    def secrets_changes(self):
-        """Une clé vient de changer : le Codex doit relire le token."""
-        if self.codex is not None:
-            self.codex.token = lire_secret(FICHIER_TOKEN, "GITHUB_TOKEN")
-            self.codex.depots = []
-
-    # ---------- Clé API ----------
-    def demander_cle(self):
-        cle = simpledialog.askstring(
-            "Clé API", "Colle ta clé API Claude (elle commence par sk-ant-) :", show="*", parent=self)
-        if cle and cle.strip():
-            enregistrer_secret(FICHIER_CLE, cle.strip())
-            return cle.strip()
-        return ""
 
     # ---------- Sauvegarder / Nouveau ----------
     def sauvegarder(self):
