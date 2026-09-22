@@ -9,11 +9,14 @@
 import base64
 import datetime
 import json
+import math
 import os
 import queue
+import random
 import re
 import threading
 import tkinter as tk
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -47,6 +50,8 @@ POLICE = (FAMILLE, 14)
 POLICE_BOUTON = (FAMILLE, 11, "bold")
 POLICE_INVITE = (FAMILLE, 18)
 POLICE_CODE = (FAMILLE_CODE, 12)
+TAILLE_AGENT = 16    # taille du texte des réponses de l'agent (tes questions : 14)
+COULEUR_LIEN = "#6e2a00"   # liens web cliquables
 
 MARGE = 25            # espace entre la zone d'écriture et le bas de l'écran
 LARGEUR = 0.70        # largeur des zones (70 % de la fenêtre)
@@ -57,7 +62,7 @@ LARGEUR_MENU = 270    # largeur du menu de gauche
 FICHIER_LOGO = Path(__file__).with_name("logo_marceau.png")   # le logo va à côté du script
 LOGO_CENTRE = 160     # taille du logo au milieu de l'écran, au début
 LOGO_GAUCHE = 110     # taille une fois rendu à gauche
-LOGO_AVATAR = 28      # petit logo devant chaque réponse de l'agent
+LOGO_AVATAR = 34      # petit logo devant chaque réponse de l'agent
 
 # ---------- Couleurs du code dans le Codex ----------
 CODE_FOND = "#262626"          # gris mat foncé
@@ -91,8 +96,6 @@ COULEURS_CODE = {
 }
 
 # ---------- Réglages des IA et de GitHub ----------
-MODELE_CLAUDE = "claude-sonnet-5"   # celui choisi au démarrage
-# Les modèles Claude offerts dans le menu. Prix par million de mots-jetons (entrée / sortie).
 MODELES_CLAUDE = (
     ("claude-opus-5",    "Opus 5",    "le plus capable",            "5 $ / 25 $"),
     ("claude-sonnet-5",  "Sonnet 5",  "bon partout, moins cher",    "2 $ / 10 $"),
@@ -100,19 +103,21 @@ MODELES_CLAUDE = (
     ("claude-fable-5-1", "Fable 5.1", "pour les tâches longues",    "10 $ / 50 $"),
 )
 _modeles_claude_en_ligne = []   # rempli par l'API quand une clé est branchée
+MODELE_CLAUDE = "claude-sonnet-5"   # celui choisi au démarrage
 URL_CLAUDE = "https://api.anthropic.com/v1/messages"
 URL_OLLAMA = "http://localhost:11434"
 URL_GITHUB = "https://api.github.com"
 DOSSIER_CONFIG = Path.home() / ".config" / "ecriture"
 FICHIER_CLE = DOSSIER_CONFIG / "cle_api"
 FICHIER_TOKEN = DOSSIER_CONFIG / "github_token"
+FICHIER_REGLAGES = DOSSIER_CONFIG / "reglages.json"   # ta ville pour la météo
 DOSSIER_SESSIONS = Path.home() / ".local" / "share" / "ecriture" / "sessions"
 FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'auto
 
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
 RECHERCHES_MAX = 5                     # recherches web max par question (Claude)
@@ -132,6 +137,7 @@ MODELES_SUGGERES = (
     ("qwen3",       "5,2 Go", "Le plus fort pour le code et le raisonnement."),
     ("deepseek-r1", "5,2 Go", "Réfléchit avant de répondre. Plus lent, plus posé."),
 )
+
 
 QUEBECOIS = (
     "Tu es un vrai Québécois. Tu parles pis tu écris en français québécois familier, "
@@ -154,11 +160,23 @@ def instructions_systeme(web):
     )
     if web:
         texte += ("Fais une recherche web dès que la question touche l'actualité, des prix, "
-                  "des horaires, la météo, des personnes ou n'importe quoi qui a pu changer récemment. ")
+                  "des horaires, des personnes ou n'importe quoi qui a pu changer récemment. ")
     else:
-        texte += ("Tu n'as pas accès à Internet. Si la question demande des infos récentes "
-                  "(actualité, météo, prix, horaires), dis-le franchement au lieu d'inventer "
-                  "et suggère de choisir un des Claude dans le menu sous la boîte. ")
+        texte += ("Tu n'as pas accès à Internet (sauf pour la météo, que l'application affiche "
+                  "elle-même). Si la question demande des infos récentes (actualité, prix, horaires), "
+                  "dis-le franchement au lieu d'inventer "
+                  f"et suggère de choisir « {NOM_CLAUDE} » dans le menu. ")
+    ville = lire_reglages().get("ville", "")
+    texte += (
+        "Pouvoir spécial : l'application affiche elle-même la météo en direct. Quand on te demande "
+        "la météo, la température ou s'il va pleuvoir ou neiger quelque part, n'invente aucun chiffre "
+        "et ne fais pas de recherche web : écris une phrase courte (ex. : « Voici la météo à "
+        "Chicoutimi! ») et termine par un bloc comme [METEO Chicoutimi, Québec, Canada] "
+        "(ville, province ou état, pays). Si la personne ne dit pas où, écris juste [METEO]. "
+        + (f"La ville de la personne est {ville}. " if ville else "")
+        + "Quand c'est utile, partage des liens web complets qui commencent par https:// "
+        "(sites officiels, documentation), seulement si tu es sûr qu'ils existent. "
+    )
     texte += (
         "Quand ta réponse explique un plan d'action ou des étapes à suivre, termine-la "
         "par un bloc exactement comme celui-ci (une étape courte par ligne, moins de 12 mots) :\n"
@@ -179,7 +197,9 @@ def instructions_codex():
         "Pour un fichier qui existe déjà, utilise son chemin exact de l'arborescence. "
         "Pas de ``` dans ces blocs. Avant les blocs, explique en quelques phrases ce que tu changes "
         "et pourquoi, en texte brut sans Markdown. Touche seulement aux fichiers nécessaires. "
-        "Si on te pose juste une question, réponds sans bloc."
+        "Si on te pose juste une question, réponds sans bloc. "
+        "Si tu dois voir d'autres fichiers du projet avant de les modifier, réponds seulement avec "
+        "un bloc [LIRE] qui liste leurs chemins (un par ligne), terminé par [/LIRE]."
     )
 
 
@@ -196,6 +216,29 @@ def enregistrer_secret(fichier, valeur):
     fichier.parent.mkdir(parents=True, exist_ok=True)
     fichier.write_text(valeur, encoding="utf-8")
     os.chmod(fichier, 0o600)
+
+
+def lire_reglages():
+    try:
+        return json.loads(FICHIER_REGLAGES.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def pousser_auto():
+    """True si le Codex a le droit d'envoyer ses changements sur GitHub tout seul."""
+    return bool(lire_reglages().get("pousser_auto"))
+
+
+def regler_pousser_auto(actif):
+    reglages = lire_reglages()
+    reglages["pousser_auto"] = bool(actif)
+    enregistrer_reglages(reglages)
+
+
+def enregistrer_reglages(reglages):
+    DOSSIER_CONFIG.mkdir(parents=True, exist_ok=True)
+    FICHIER_REGLAGES.write_text(json.dumps(reglages, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 # ---------- Ollama (gratuit, local) ----------
@@ -426,6 +469,7 @@ def extraire_fichiers(texte):
     explication = re.sub(r"\[FICHIER\s+([^\]\n]+)\]\n?(.*?)\[/FICHIER\]", garder, texte,
                          flags=re.S | re.I)
     explication = re.sub(r"\[PLAN\].*?(\[/PLAN\]|$)", "", explication, flags=re.S | re.I)
+    explication = re.sub(r"\[LIRE\].*?(\[/LIRE\]|$)", "", explication, flags=re.S | re.I)
     return explication.strip(), fichiers
 
 
@@ -597,6 +641,477 @@ def jetons(texte, langage):
                                     "js" if m.group(1).lower() == "script" else "css", debut)
         position = fin
     return resultat + _jetons_simples(texte[position:], "html", position)
+
+
+# ---------- Pouvoir magique : la météo en direct (Open-Meteo, gratuit, sans clé) ----------
+URL_GEO = "https://geocoding-api.open-meteo.com/v1/search"
+URL_METEO = "https://api.open-meteo.com/v1/forecast"
+PAYS_PREFERE = "CA"   # en cas d'égalité (ex. : Alma), on prend la ville au Canada
+
+CODES_METEO = {
+    0: ("Ciel dégagé", "soleil"), 1: ("Plutôt dégagé", "soleil_nuage"),
+    2: ("Partiellement nuageux", "soleil_nuage"), 3: ("Couvert", "nuage"),
+    45: ("Brouillard", "brouillard"), 48: ("Brouillard givrant", "brouillard"),
+    51: ("Bruine légère", "pluie"), 53: ("Bruine", "pluie"), 55: ("Forte bruine", "pluie"),
+    56: ("Bruine verglaçante", "pluie"), 57: ("Bruine verglaçante", "pluie"),
+    61: ("Pluie faible", "pluie"), 63: ("Pluie", "pluie"), 65: ("Forte pluie", "pluie"),
+    66: ("Pluie verglaçante", "pluie"), 67: ("Pluie verglaçante", "pluie"),
+    71: ("Neige faible", "neige"), 73: ("Neige", "neige"), 75: ("Forte neige", "neige"),
+    77: ("Grains de neige", "neige"), 80: ("Averses", "pluie"), 81: ("Averses", "pluie"),
+    82: ("Fortes averses", "pluie"), 85: ("Averses de neige", "neige"),
+    86: ("Fortes averses de neige", "neige"), 95: ("Orage", "orage"),
+    96: ("Orage avec grêle", "orage"), 99: ("Orage avec grêle", "orage"),
+}
+JOURS = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."]
+MOTS_METEO = re.compile(r"m[ée]t[ée]o|quel(?:le)?s? temps|kel temps|pleuv|il pleut|neiger|"
+                        r"il neige|pr[ée]visions?", re.I)
+MOTS_PAS_LIEU = set("demain demin aujourd'hui aujourdhui auj ce cette cet soir matin midi "
+                    "semaine fin weekend week-end maintenant svp stp là la le les prochain "
+                    "prochaine prochains météo meteo temps quoi quel quelle stp".split())
+
+
+class PasDeLieu(Exception):
+    pass
+
+
+class LieuIntrouvable(Exception):
+    pass
+
+
+def decrire_meteo(code, jour=True):
+    description, icone = CODES_METEO.get(int(code), ("Météo inconnue", "nuage"))
+    if not jour:
+        icone = {"soleil": "lune", "soleil_nuage": "lune_nuage"}.get(icone, icone)
+    return description, icone
+
+
+def extraire_meteo(texte, question):
+    """Retourne (texte sans le bloc [METEO …], lieu demandé). Lieu = None si pas de météo demandée,
+    "" si la météo est demandée sans dire où (on prendra la ville des Paramètres)."""
+    m = re.search(r"\[M[ÉE]T[ÉE]O(?:\s*[:\-]?\s*([^\]\n]*))?\]", texte, re.I)
+    if m:
+        return (texte[:m.start()] + texte[m.end():]).strip(), (m.group(1) or "").strip()
+    if MOTS_METEO.search(question):   # l'IA a oublié le bloc : on devine le lieu dans la question
+        return texte, lieu_dans_question(question)
+    return texte, None
+
+
+def lieu_dans_question(question):
+    motif = r"\b(?:à|a|au|aux|en|pour|sur|dans|de|du)\s+(?:la\s+|le\s+|l['’])?([a-zà-ÿ'’\-]+(?:[\s\-][a-zà-ÿ'’\-]+){0,2})"
+    for m in re.finditer(motif, question, re.I):
+        mots = []
+        for mot in re.split(r"\s+", m.group(1)):
+            if mot.lower().strip("'’") in MOTS_PAS_LIEU:
+                break
+            mots.append(mot)
+        if mots:
+            return " ".join(mots)
+    return ""
+
+
+def sans_accents(texte):
+    return "".join(c for c in unicodedata.normalize("NFD", texte.lower())
+                   if unicodedata.category(c) != "Mn")
+
+
+def lire_json(url):
+    requete = urllib.request.Request(url, headers={"User-Agent": "Ecriture-app"})
+    with urllib.request.urlopen(requete, timeout=15) as rep:
+        return json.loads(rep.read().decode("utf-8"))
+
+
+def trouver_lieu(lieu):
+    parties = [p.strip() for p in lieu.split(",") if p.strip()]
+    if not parties:
+        raise PasDeLieu()
+    indices = [sans_accents(p) for p in parties[1:]]
+    mots = parties[0].split()
+    essais = [parties[0]] + [" ".join(mots[:n]) for n in range(len(mots) - 1, 0, -1)]
+    for essai in dict.fromkeys(essais):   # sans doublons, dans l'ordre
+        data = lire_json(URL_GEO + "?" + urllib.parse.urlencode(
+            {"name": essai, "count": 10, "language": "fr", "format": "json"}))
+        resultats = data.get("results") or []
+        if not resultats:
+            continue
+
+        def score(r):
+            texte = sans_accents(" ".join(str(r.get(k) or "") for k in
+                                          ("admin1", "admin2", "country", "country_code")))
+            return (sum(1 for i in indices if i and i in texte),
+                    r.get("country_code") == PAYS_PREFERE, r.get("population") or 0)
+
+        return max(resultats, key=score)
+    raise LieuIntrouvable(lieu)
+
+
+def obtenir_meteo(lieu, ville_par_defaut=""):
+    lieu = lieu or ville_par_defaut
+    if not lieu:
+        raise PasDeLieu()
+    endroit = trouver_lieu(lieu)
+    data = lire_json(URL_METEO + "?" + urllib.parse.urlencode({
+        "latitude": endroit["latitude"], "longitude": endroit["longitude"],
+        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,"
+                   "wind_speed_10m,is_day",
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+        "timezone": "auto", "forecast_days": 5,
+    }))
+    region = ", ".join(x for x in (endroit.get("admin1"), endroit.get("country")) if x)
+    return {"nom": endroit.get("name", lieu), "region": region,
+            "actuel": data.get("current", {}), "jours": data.get("daily", {})}
+
+
+def message_meteo(err, lieu):
+    if isinstance(err, PasDeLieu):
+        return "Dis-moi pour quelle ville, ou ajoute ta ville dans Paramètres (menu ☰)."
+    if isinstance(err, LieuIntrouvable):
+        return f"J'ai pas trouvé « {lieu} ». Essaie avec le nom de la ville pis la province."
+    if isinstance(err, urllib.error.URLError):
+        return "Pas de connexion Internet pour aller chercher la météo."
+    return f"Météo pas disponible : {err}"
+
+
+# ---------- Liens web cliquables ----------
+URL_WEB = re.compile(r"(?:https?://|www\.)[^\s<>\"'«»]+", re.I)
+
+
+def nettoyer_url(url):
+    while url and url[-1] in ".,;:!?]}»'\"":
+        url = url[:-1]
+    if url.endswith(")") and url.count("(") < url.count(")"):
+        url = url[:-1]
+    return url
+
+
+def liens_markdown_en_texte(texte):
+    # « [ti-lex](https://ti-lex.ca) » devient « ti-lex (https://ti-lex.ca) »
+    return re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", r"\1 (\2)", texte)
+
+
+def rectangle_arrondi(canvas, x0, y0, x1, y1, r, **options):
+    points = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
+              x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+    return canvas.create_polygon(points, smooth=True, **options)
+
+
+def arrondi(valeur):
+    return "–" if valeur is None else str(round(valeur))
+
+
+class CarteMeteo(tk.Canvas):
+    """Carte météo animée : le soleil tourne, la pluie pis la neige tombent, les nuages flottent."""
+    HAUTEUR = 262
+    PAS_MS = 40
+
+    def __init__(self, parent, meteo, largeur):
+        super().__init__(parent, bg=GRIS_ZONE, highlightthickness=0, bd=0,
+                         width=largeur, height=self.HAUTEUR, cursor="arrow")
+        self.rayons, self.nuages, self.gouttes, self.flocons, self.eclairs, self.brumes = [], [], [], [], [], []
+        self.t = 0
+        self.dessiner(meteo, largeur)
+        self.after(self.PAS_MS, self.animer)
+
+    def dessiner(self, meteo, largeur):
+        a, j = meteo["actuel"], meteo["jours"]
+        description, icone = decrire_meteo(a.get("weather_code", 3), bool(a.get("is_day", 1)))
+        W, H = largeur, self.HAUTEUR
+        rectangle_arrondi(self, 4, 4, W - 4, H - 4, 18, fill=GRIS_BOITE, outline=ORANGE, width=2)
+        self.create_text(W - 24, 22, anchor="ne", text=meteo["nom"], fill=NOIR, font=(FAMILLE, 15, "bold"))
+        self.create_text(W - 24, 46, anchor="ne", text=meteo["region"], fill="#2e2e2e", font=(FAMILLE, 10))
+        self.icone(icone, 80, 82, 108, anime=True)
+        self.create_text(152, 26, anchor="nw", text=f"{arrondi(a.get('temperature_2m'))}°",
+                         fill=NOIR, font=(FAMILLE, 44, "bold"))
+        self.create_text(154, 98, anchor="nw", text=description, fill=NOIR, font=(FAMILLE, 13, "bold"))
+        self.create_text(154, 122, anchor="nw", fill="#2e2e2e", font=(FAMILLE, 10), text=(
+            f"Ressenti {arrondi(a.get('apparent_temperature'))}°    "
+            f"Vent {arrondi(a.get('wind_speed_10m'))} km/h    "
+            f"Humidité {arrondi(a.get('relative_humidity_2m'))} %"))
+        self.create_line(24, 152, W - 24, 152, fill=GRIS_BORD)
+        dates = j.get("time") or []
+        colonne = (W - 48) / max(len(dates), 1)
+        for i, date in enumerate(dates):
+            cx = 24 + colonne * (i + 0.5)
+            nom = "Auj." if i == 0 else JOURS[datetime.date.fromisoformat(date).weekday()]
+            self.create_text(cx, 168, text=nom, fill=NOIR, font=(FAMILLE, 10, "bold"))
+            self.icone(decrire_meteo(j["weather_code"][i])[1], cx, 198, 38, anime=False)
+            self.create_text(cx, 230, fill=NOIR, font=(FAMILLE, 10, "bold"), text=(
+                f"{arrondi(j['temperature_2m_max'][i])}° / {arrondi(j['temperature_2m_min'][i])}°"))
+            proba = (j.get("precipitation_probability_max") or [None] * len(dates))[i]
+            if proba is not None:
+                self.create_text(cx, 246, text=f"Précip. {proba} %", fill="#2e2e2e", font=(FAMILLE, 8))
+
+    # ----- Les icônes, dessinées avec des formes -----
+    def icone(self, sorte, cx, cy, s, anime):
+        if sorte in ("soleil", "soleil_nuage"):
+            self.soleil(*((cx, cy, s) if sorte == "soleil" else (cx - 0.16 * s, cy - 0.14 * s, 0.72 * s)), anime)
+        if sorte in ("lune", "lune_nuage"):
+            self.lune(*((cx, cy, s) if sorte == "lune" else (cx - 0.16 * s, cy - 0.14 * s, 0.72 * s)))
+        if sorte in ("soleil_nuage", "lune_nuage"):
+            self.nuage(cx + 0.06 * s, cy + 0.1 * s, 0.8 * s, "#f4f4f4", anime)
+        elif sorte == "nuage":
+            self.nuage(cx - 0.14 * s, cy - 0.08 * s, 0.68 * s, "#cfcfcf", anime)
+            self.nuage(cx + 0.06 * s, cy + 0.06 * s, 0.86 * s, "#f4f4f4", anime)
+        elif sorte == "pluie":
+            self.nuage(cx, cy - 0.14 * s, 0.92 * s, "#dcdcdc", anime)
+            self.chute(cx, cy, s, anime, flocons=False)
+        elif sorte == "neige":
+            self.nuage(cx, cy - 0.14 * s, 0.92 * s, "#eeeeee", anime)
+            self.chute(cx, cy, s, anime, flocons=True)
+        elif sorte == "orage":
+            self.nuage(cx, cy - 0.16 * s, 0.92 * s, "#a9a9a9", anime)
+            self.eclair(cx, cy, s, anime)
+        elif sorte == "brouillard":
+            self.brume(cx, cy, s, anime)
+
+    def soleil(self, cx, cy, s, anime):
+        rayons = []
+        for k in range(8):
+            ligne = self.create_line(0, 0, 0, 0, fill="#ff9f00", width=max(2, s / 24), capstyle="round")
+            rayons.append((ligne, k * math.pi / 4))
+        r = 0.24 * s
+        self.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#ffc21a", outline="#ff9800", width=max(1, s / 40))
+        groupe = (cx, cy, s, rayons)
+        self.placer_rayons(groupe, 0, 0)
+        if anime:
+            self.rayons.append(groupe)
+
+    def placer_rayons(self, groupe, angle, pulsation):
+        cx, cy, s, rayons = groupe
+        for ligne, base in rayons:
+            a = base + angle
+            r1, r2 = 0.33 * s, 0.47 * s + pulsation
+            self.coords(ligne, cx + r1 * math.cos(a), cy + r1 * math.sin(a),
+                        cx + r2 * math.cos(a), cy + r2 * math.sin(a))
+
+    def lune(self, cx, cy, s):
+        r = 0.27 * s
+        self.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#f3e7a8", outline="#d9c56a")
+        self.create_oval(cx - r + 0.13 * s, cy - r - 0.08 * s, cx + r + 0.13 * s, cy + r - 0.08 * s,
+                         fill=GRIS_BOITE, outline=GRIS_BOITE)
+
+    def nuage(self, cx, cy, s, couleur, anime):
+        morceaux = [self.create_oval(cx + x0 * s, cy + y0 * s, cx + x1 * s, cy + y1 * s, fill=couleur, outline="")
+                    for x0, y0, x1, y1 in ((-0.42, -0.02, -0.04, 0.3), (-0.2, -0.24, 0.2, 0.16),
+                                           (0.0, -0.1, 0.42, 0.3))]
+        morceaux.append(self.create_rectangle(cx - 0.24 * s, cy + 0.08 * s, cx + 0.24 * s, cy + 0.3 * s,
+                                              fill=couleur, outline=""))
+        morceaux.append(self.create_line(cx - 0.26 * s, cy + 0.3 * s, cx + 0.26 * s, cy + 0.3 * s,
+                                         fill="#9a9a9a"))
+        if anime:
+            self.nuages.append({"ids": morceaux, "phase": random.random() * 6, "decalage": 0.0,
+                                "ampleur": max(2.0, s / 30)})
+
+    def chute(self, cx, cy, s, anime, flocons):
+        haut, bas = cy + 0.2 * s, cy + 0.5 * s
+        positions = (-0.26, -0.09, 0.08, 0.25)
+        for n, px in enumerate(positions):
+            x = cx + px * s
+            y = haut + (bas - haut) * ((n * 0.37) % 1)
+            if flocons:
+                r = max(2, s / 26)
+                item = self.create_oval(x - r, y - r, x + r, y + r, fill="#ffffff", outline="#8c8c8c")
+            else:
+                item = self.create_line(x, y, x - 0.03 * s, y + 0.1 * s, fill="#2f6fd6",
+                                        width=max(2, s / 30), capstyle="round")
+            if anime:
+                (self.flocons if flocons else self.gouttes).append(
+                    {"id": item, "x": x, "y": y, "haut": haut, "bas": bas, "s": s,
+                     "vitesse": s / (160 if flocons else 60), "phase": n * 1.7})
+
+    def eclair(self, cx, cy, s, anime):
+        points = [(0.02, 0.08), (-0.1, 0.32), (0.0, 0.32), (-0.07, 0.52), (0.13, 0.22), (0.03, 0.22), (0.09, 0.08)]
+        item = self.create_polygon([v for x, y in points for v in (cx + x * s, cy + y * s)],
+                                   fill="#ffd000", outline="#d49b00")
+        if anime:
+            self.eclairs.append(item)
+
+    def brume(self, cx, cy, s, anime):
+        for n, (dy, largeur) in enumerate(((-0.2, 0.36), (-0.05, 0.42), (0.1, 0.34), (0.25, 0.4))):
+            item = self.create_line(cx - largeur * s, cy + dy * s, cx + largeur * s, cy + dy * s,
+                                    fill="#e8e8e8", width=max(3, s / 14), capstyle="round")
+            if anime:
+                self.brumes.append({"id": item, "phase": n * 1.3, "decalage": 0.0, "ampleur": s / 14})
+
+    # ----- L'animation -----
+    def animer(self):
+        try:
+            if not self.winfo_exists():
+                return
+            self.t += 1
+            t = self.t
+            for groupe in self.rayons:
+                self.placer_rayons(groupe, t * 0.025, 0.035 * groupe[2] * math.sin(t * 0.12))
+            for n in self.nuages + self.brumes:
+                nouveau = n["ampleur"] * math.sin(t * 0.045 + n["phase"])
+                for item in n.get("ids", [n.get("id")]):
+                    self.move(item, nouveau - n["decalage"], 0)
+                n["decalage"] = nouveau
+            for g in self.gouttes:
+                g["y"] += g["vitesse"]
+                if g["y"] > g["bas"]:
+                    g["y"] = g["haut"]
+                self.coords(g["id"], g["x"], g["y"], g["x"] - 0.03 * g["s"], g["y"] + 0.1 * g["s"])
+            for f in self.flocons:
+                f["y"] += f["vitesse"]
+                if f["y"] > f["bas"]:
+                    f["y"] = f["haut"]
+                x = f["x"] + 3 * math.sin(t * 0.08 + f["phase"])
+                r = max(2, f["s"] / 26)
+                self.coords(f["id"], x - r, f["y"] - r, x + r, f["y"] + r)
+            flash = (t % 70) in (0, 1, 4, 5)   # l'éclair clignote de temps en temps
+            for item in self.eclairs:
+                self.itemconfig(item, fill="#fff6b0" if flash else "#ffd000")
+            self.after(self.PAS_MS, self.animer)
+        except tk.TclError:
+            return   # la carte a été effacée
+
+
+# ---------- L'agent Codex : il trouve tout seul les fichiers à lire pis à modifier ----------
+def instructions_selection():
+    return (
+        "Tu es Codex. On te donne l'arborescence d'un projet (avec la taille des fichiers) et une "
+        "demande. Choisis les fichiers que tu dois lire pour faire la demande : ceux à modifier, "
+        "pis ceux qui aident à comprendre. Réponds SEULEMENT avec un bloc comme celui-ci :\n"
+        "[LIRE]\nchemin/exact/fichier1.py\nchemin/exact/fichier2.js\n[/LIRE]\n"
+        "Maximum 10 fichiers, avec les chemins exacts de l'arborescence. Si la demande crée juste "
+        "un nouveau fichier sans avoir besoin des autres, réponds [LIRE][/LIRE]."
+    )
+
+
+def taille_lisible(octets):
+    return f"{octets} o" if octets < 1024 else f"{octets / 1024:.0f} Ko"
+
+
+def demande_selection(question, historique, arbre, ouverts):
+    lignes = [f"{c} ({taille_lisible(i['taille'])})" for c, i in sorted(arbre.items())]
+    texte = f"Arborescence du projet ({len(arbre)} fichiers) :\n" + "\n".join(lignes[:800])
+    if len(lignes) > 800:
+        texte += "\n…"
+    if ouverts:
+        texte += "\n\nFichiers ouverts à l'écran : " + ", ".join(ouverts)
+    recents = [f"{m['role']} : {m['content'][:400]}" for m in historique[:-1][-4:]]
+    if recents:
+        texte += "\n\nConversation récente :\n" + "\n".join(recents)
+    return texte + f"\n\nDemande : {question}"
+
+
+def extraire_lire(texte, strict=True):
+    """Les chemins demandés dans un bloc [LIRE]…[/LIRE]."""
+    m = re.search(r"\[LIRE\](.*?)(?:\[/LIRE\]|$)", texte or "", re.S | re.I)
+    if m:
+        return m.group(1).splitlines()
+    return [] if strict else (texte or "").splitlines()
+
+
+def associer_chemins(noms, arbre):
+    """Retrouve les vrais chemins du projet, même si l'IA les écrit un peu croche."""
+    en_minuscules = {c.lower(): c for c in arbre}
+    par_nom = {}
+    for c in arbre:
+        par_nom.setdefault(Path(c).name.lower(), []).append(c)
+    trouves = []
+    for nom in noms:
+        nom = re.sub(r"\s*\(.*\)\s*$", "", nom.strip().strip("-*•`'\" ")).strip()
+        nom = nom[2:] if nom.startswith("./") else nom
+        nom = nom.lstrip("/")
+        if not nom:
+            continue
+        chemin = arbre.get(nom) and nom or en_minuscules.get(nom.lower())
+        if not chemin:
+            pareils = par_nom.get(Path(nom).name.lower(), [])
+            chemin = pareils[0] if len(pareils) == 1 else None
+        if chemin and chemin not in trouves:
+            trouves.append(chemin)
+    return trouves
+
+
+def deviner_fichiers(question, arbre):
+    """Plan B si l'IA choisit rien : les fichiers dont le nom revient dans la demande."""
+    mots = {m.lower() for m in re.findall(r"[\w\-]{3,}", question)}
+    scores = []
+    for c, info in arbre.items():
+        if not est_texte(c):
+            continue
+        nom = Path(c).stem.lower()
+        score = 3 * (nom in mots) + sum(1 for m in mots if m in c.lower())
+        if score:
+            scores.append((score, -info["taille"], c))
+    return [c for _, _, c in sorted(scores, reverse=True)[:6]]
+
+
+def contexte_codex(depot, branche, arbre, fichiers, budget):
+    """Prépare ce que l'IA voit : l'arborescence + le contenu des fichiers (tant qu'il reste de la place).
+    Retourne (texte, chemins vraiment inclus)."""
+    if depot:
+        chemins = sorted(arbre)
+        liste = "\n".join(chemins[:600]) + ("\n…" if len(chemins) > 600 else "")
+        parties = [f"Projet GitHub : {depot} (branche {branche}), {len(chemins)} fichiers.\n"
+                   f"Arborescence :\n{liste}"]
+    else:
+        parties = ["Pas de projet GitHub ouvert. Les fichiers que tu écris vont s'ouvrir dans l'éditeur."]
+    total, inclus, omis = len(parties[0]), [], []
+    for chemin, contenu, note in fichiers:
+        bloc = f"--- {chemin} ({note}) ---\n{contenu}"
+        if total + len(bloc) > budget:
+            omis.append(chemin)
+            continue
+        parties.append(bloc)
+        total += len(bloc)
+        inclus.append(chemin)
+    if omis:
+        parties.append(f"(Pas inclus, faute de place : {', '.join(omis[:30])})")
+    return "\n\n".join(parties), inclus
+
+
+def agent_codex(question, historique, onglets, cache, arbre, depot, branche, token, budget, ia, progres):
+    """Roule dans un fil à part. Choisit les fichiers, les lit sur GitHub, pis demande le code à l'IA.
+    Retourne {"texte": réponse de l'IA, "lus": fichiers lus sur GitHub, "vus": fichiers montrés à l'IA}."""
+    connus = dict(cache)
+    connus.update(dict(onglets))    # un onglet ouvert a peut-être des changements pas enregistrés
+    ouverts = [c for c, _ in onglets]
+    lus = {}
+
+    def lire(chemins):
+        manquants = [c for c in chemins if c not in connus and c in arbre]
+        if manquants:
+            noms = ", ".join(Path(c).name for c in manquants[:5]) + ("…" if len(manquants) > 5 else "")
+            progres(f"Codex lit {len(manquants)} fichier(s) : {noms}")
+        for c in manquants:
+            try:
+                connus[c] = lus[c] = lire_blob(depot, arbre[c]["sha"], token)
+            except UnicodeDecodeError:
+                pass   # fichier binaire : on le saute
+
+    choisis = []
+    if depot:
+        textes = [c for c, i in arbre.items() if est_texte(c) and i["taille"] <= 300_000]
+        if sum(arbre[c]["taille"] for c in textes) <= budget * 0.7 and len(textes) <= 60:
+            choisis = sorted(textes)   # petit projet : Codex lit tout
+        else:
+            progres("Codex cherche les bons fichiers…")
+            reponse = ia([{"role": "user", "content": demande_selection(question, historique, arbre, ouverts)}],
+                         instructions_selection(), 800)
+            choisis = associer_chemins(extraire_lire(reponse, strict=False), arbre)[:10]
+            choisis = choisis or deviner_fichiers(question, arbre)
+        lire(choisis)
+
+    texte, vus = "", []
+    for tour in range(2):
+        fichiers = [(c, connus[c], "ouvert à l'écran" if c in ouverts else "lu par Codex")
+                    for c in dict.fromkeys(ouverts + choisis) if c in connus]
+        contexte, vus = contexte_codex(depot, branche, arbre, fichiers, budget)
+        envoi = [dict(m) for m in historique]
+        envoi[-1]["content"] = contexte + "\n\nDemande : " + question
+        progres("Codex écrit le code…")
+        texte = ia(envoi, instructions_codex(), 16000)
+        # L'IA peut demander d'autres fichiers avant d'écrire : on les lit pis on recommence une fois
+        nouveaux = [c for c in associer_chemins(extraire_lire(texte), arbre) if c not in choisis] if depot else []
+        if tour == 0 and nouveaux and "[FICHIER" not in texte.upper():
+            choisis += nouveaux[:6]
+            lire(nouveaux[:6])
+            continue
+        break
+    return {"texte": texte, "lus": lus, "vus": vus}
 
 
 # ---------- Moteur de schéma ----------
@@ -952,6 +1467,7 @@ class IAGratuites(tk.Toplevel):
 
 
 # ---------- Le logo de l'agent ----------
+# ---------- Le logo de l'agent ----------
 class LogoAgent:
     """Le logo Marceau : au centre au début, il glisse à gauche quand l'agent commence à répondre."""
     ETAPES = 32   # nombre d'images de l'animation (plus = plus lent et plus doux)
@@ -973,6 +1489,8 @@ class LogoAgent:
                 self.images[image.width()] = image
         self.label = tk.Label(app, bg=GRIS_FOND, bd=0, highlightthickness=0)
         self.position = "cache"
+        self.suivi = False      # True = le logo se tient à côté de la réponse de l'agent
+        self.y_actuel = HAUT_DOC + LOGO_GAUCHE / 2
 
     def image(self, taille):
         return self.images[min(self.images, key=lambda t: abs(t - taille))]
@@ -989,9 +1507,51 @@ class LogoAgent:
 
     def a_gauche(self):
         self.label.config(image=self.image(LOGO_GAUCHE))
-        self.label.place(relx=(1 - LARGEUR) / 4, rely=0, x=0, y=HAUT_DOC + LOGO_GAUCHE / 2,
-                         anchor="center")
         self.position = "gauche"
+        self.recaler(anime=True)
+
+    def placer_gauche(self, y):
+        self.y_actuel = y
+        self.label.place(relx=(1 - LARGEUR) / 4, rely=0, x=0, y=y, anchor="center")
+
+    def suivre(self, index, anime=True):
+        """Le logo va se placer à côté de la réponse qui commence à cet endroit."""
+        doc = self.app.document
+        doc.mark_set("logo_suivi", index)
+        doc.mark_gravity("logo_suivi", "left")
+        self.suivi = True
+        self.recaler(anime)
+
+    def arreter_suivi(self):
+        self.suivi = False
+
+    def y_cible(self):
+        doc = self.app.document
+        if not self.suivi or not doc.winfo_ismapped():
+            return HAUT_DOC + LOGO_GAUCHE / 2
+        haut, hauteur = doc.winfo_y(), doc.winfo_height()
+        info = doc.bbox("logo_suivi")
+        if info:
+            y = haut + info[1]
+        elif doc.compare("logo_suivi", "<", "@0,0"):
+            y = haut                          # la réponse est plus haut : le logo reste en haut
+        else:
+            y = haut + hauteur - LOGO_GAUCHE  # plus bas : il attend en bas
+        y = max(haut, min(y, haut + hauteur - LOGO_GAUCHE))
+        return y + LOGO_GAUCHE / 2
+
+    def recaler(self, anime=False):
+        """Replace le logo à côté de la réponse (appelé quand la conversation défile)."""
+        if self.position != "gauche":
+            return
+        if "logo_suivi" in self.app._anims:
+            return   # il est déjà en train de bouger; il se recalera en arrivant
+        cible = self.y_cible()
+        if anime and abs(cible - self.y_actuel) > 2:
+            self.app.animer("logo_suivi", self.y_actuel, cible, self.placer_gauche,
+                            lambda: self.recaler(False), etapes=18, douce=True)
+        else:
+            self.placer_gauche(cible)
 
     def glisser(self, vers_gauche=True):
         """Fait glisser le logo en douceur (il rapetisse en allant à gauche, grossit en revenant)."""
@@ -1004,9 +1564,9 @@ class LogoAgent:
         self.position = "en route"
 
         def appliquer(p):
+            self.y_actuel = y0 + (y1 - y0) * p
             self.label.config(image=self.image(t0 + (t1 - t0) * p))
-            self.label.place(relx=0, rely=0, x=x0 + (x1 - x0) * p, y=y0 + (y1 - y0) * p,
-                             anchor="center")
+            self.label.place(relx=0, rely=0, x=x0 + (x1 - x0) * p, y=self.y_actuel, anchor="center")
 
         app.animer("logo", 0.0, 1.0, appliquer, self.a_gauche if vers_gauche else self.au_centre,
                    etapes=self.ETAPES, ms=14, douce=True)
@@ -1204,6 +1764,12 @@ class CodexVue(tk.Frame):
         self.bouton_projet.pack(side="left", pady=13)
         bouton_orange(barre, "Scanner", self.scanner).pack(side="left", padx=(10, 0), pady=13)
         bouton_orange(barre, "Enregistrer", self.enregistrer_tout).pack(side="left", padx=(10, 0), pady=13)
+        self.auto_push = tk.BooleanVar(value=pousser_auto())
+        tk.Checkbutton(barre, text="Pousser tout seul", variable=self.auto_push,
+                       command=self.changer_auto_push, bg=GRIS_FOND, fg=NOIR,
+                       activebackground=GRIS_FOND, activeforeground=NOIR, selectcolor=GRIS_ZONE,
+                       font=(FAMILLE, 9), relief="flat", bd=0, highlightthickness=0,
+                       cursor="hand2").pack(side="left", padx=(12, 0), pady=13)
         bouton_orange(barre, "Fermer", self.app.fermer_codex).pack(side="right", padx=(10, 18), pady=13)
         self.bouton_assistant = bouton_orange(barre, "Assistant", lambda: self.basculer("assistant"))
         self.bouton_assistant.pack(side="right", padx=(10, 0), pady=13)
@@ -1253,9 +1819,10 @@ class CodexVue(tk.Frame):
         bouton_orange(rang, "Envoyer", self.envoyer).pack(side="right")
         self.chat = tk.Text(p, width=1, **style_zone(12))
         self.chat.pack(fill="both", expand=True, padx=12)
-        self.app.configurer_tags(self.chat, 12)
-        self.chat.insert("end", "Demande-moi d'écrire du code, d'expliquer un fichier ou de corriger "
-                                "un bug. Scanne le projet pis j'vas voir tout le code.\n", "attente")
+        self.app.configurer_tags(self.chat, 12, taille_reponse=13)
+        self.chat.insert("end", "Demande-moi ce que tu veux changer dans ton projet. Pas besoin "
+                                "d'ouvrir les fichiers : j'trouve moi-même les bons, j'les lis "
+                                "pis j'les corrige.\n", "attente")
         self.saisie.bind("<Return>", self.envoyer)
         self.saisie.bind("<Shift-Return>", lambda e: (self.saisie.insert("insert", "\n"), "break")[1])
 
@@ -1273,6 +1840,13 @@ class CodexVue(tk.Frame):
 
     def etat(self, message):
         self.etat_label.config(text=message)
+
+    def changer_auto_push(self):
+        """Quand c'est coché, le Codex envoie ses changements sur GitHub sans rien demander."""
+        actif = self.auto_push.get()
+        regler_pousser_auto(actif)
+        self.etat("Le Codex va pousser ses changements sur GitHub tout seul." if actif else
+                  "Le Codex écrit dans les onglets; c'est toi qui cliques Enregistrer.")
 
     # ----- Panneaux qui s'ouvrent et se ferment -----
     def basculer(self, quel):
@@ -1374,7 +1948,7 @@ class CodexVue(tk.Frame):
         self.remplir_arbre()
         self.etat(f"{nom} ({branche}) : {len(arbre)} fichiers."
                   + (" Liste incomplète (projet très gros)." if tronque else "")
-                  + " Clique un fichier pour l'ouvrir.")
+                  + " Demande à l'assistant ce que tu veux changer : il trouve les fichiers tout seul.")
 
     def remplir_arbre(self):
         v = self.arbre_vue
@@ -1564,6 +2138,10 @@ class CodexVue(tk.Frame):
                 o.set_modifie(False)
         message = f"Enregistré sur GitHub : {', '.join(reussis)}." if reussis else ""
         self.etat((message + "  " + erreur) if erreur else message)
+        if self.auto_push.get() and (reussis or erreur):
+            self.chat.insert("end", (message or "") + ("  " + erreur if erreur else "") + "\n",
+                             "sources")
+            self.chat.see("end")
 
     # ----- Scanner tout le projet -----
     def scanner(self):
@@ -1602,33 +2180,12 @@ class CodexVue(tk.Frame):
         self.app.en_arriere_plan(travail, fini)
 
     # ----- L'assistant Codex -----
-    def contexte(self, budget):
-        parties = []
-        if self.depot:
-            chemins = sorted(self.arbre)
-            liste = "\n".join(chemins[:600]) + ("\n…" if len(chemins) > 600 else "")
-            parties.append(f"Projet GitHub : {self.depot} (branche {self.branche}), "
-                           f"{len(chemins)} fichiers.\nArborescence :\n{liste}")
-        else:
-            parties.append("Pas de projet GitHub ouvert. Les fichiers que tu écris vont "
-                           "s'ouvrir dans l'éditeur.")
-        fichiers = []
-        if self.actif:
-            fichiers.append((self.actif.chemin, self.actif.contenu(), "fichier ouvert à l'écran"))
-        fichiers += [(o.chemin, o.contenu(), "onglet ouvert") for o in self.onglets if o is not self.actif]
-        deja = {f[0] for f in fichiers}
-        fichiers += [(c, t, "projet scanné") for c, t in self.cache.items() if c not in deja]
-        total, omis = sum(len(p) for p in parties), []
-        for chemin, contenu, note in fichiers:
-            bloc = f"--- {chemin} ({note}) ---\n{contenu}"
-            if total + len(bloc) > budget:
-                omis.append(chemin)
-                continue
-            parties.append(bloc)
-            total += len(bloc)
-        if omis:
-            parties.append(f"(Pas inclus, faute de place : {', '.join(omis[:30])})")
-        return "\n\n".join(parties)
+    def maj_attente(self, message):
+        zone = self.chat.tag_ranges("attente")
+        if zone:
+            self.chat.delete(zone[0], zone[1])
+            self.chat.insert(zone[0], message + "\n", "attente")
+            self.chat.see("end")
 
     def envoyer(self, event=None):
         if self.occupe:
@@ -1652,42 +2209,58 @@ class CodexVue(tk.Frame):
             self.chat.delete("1.0", "end")   # enlève le mot d'accueil
         self.chat.insert("end", question + "\n", "question")
         self.messages.append({"role": "user", "content": question})
-        envoi = [dict(m) for m in self.messages[-8:]]
-        while envoi and envoi[0]["role"] != "user":
-            envoi.pop(0)
+        historique = [dict(m) for m in self.messages[-8:]]
+        while historique and historique[0]["role"] != "user":
+            historique.pop(0)
         budget = CONTEXTE_CLAUDE if type_moteur == "claude" else CONTEXTE_OLLAMA
-        envoi[-1]["content"] = self.contexte(budget) + "\n\nDemande : " + question
-        nom = nom_court(moteur)
-        self.chat.insert("end", f"Codex ({nom}) travaille…\n", "attente")
+        # Une photo de ce qu'on a déjà (le fil à part touche pas à l'interface)
+        ordre = ([self.actif] if self.actif else []) + [o for o in self.onglets if o is not self.actif]
+        onglets = [(o.chemin, o.contenu()) for o in ordre]
+        depot, branche, token = self.depot, self.branche, self.token
+        arbre, cache = dict(self.arbre), dict(self.cache)
+        self.chat.insert("end", f"Codex ({nom_court(moteur)}) regarde ton projet…\n", "attente")
         self.chat.see("end")
         self.occupe = True
-        systeme = instructions_codex()
 
-        def travail():
+        def ia(messages, systeme, max_tokens):
             if type_moteur == "claude":
-                return appeler_claude(cle, envoi, systeme, web=False, max_tokens=16000,
+                return appeler_claude(cle, messages, systeme, web=False, max_tokens=max_tokens,
                                       timeout=600, modele=modele)[0]
-            return appeler_ollama(modele, envoi, systeme, num_ctx=CTX_OLLAMA_CODEX)[0]
+            return appeler_ollama(modele, messages, systeme, num_ctx=CTX_OLLAMA_CODEX)[0]
 
-        self.app.en_arriere_plan(travail, lambda t, err: self.reponse(t, err, type_moteur, modele))
+        def progres(message):
+            self.app.depuis_fil(lambda: self.maj_attente(message))
+
+        self.app.en_arriere_plan(
+            lambda: agent_codex(question, historique, onglets, cache, arbre, depot, branche,
+                                token, budget, ia, progres),
+            lambda r, err: self.reponse(r, err, type_moteur, modele, depot))
         return "break"
 
-    def reponse(self, texte, err, type_moteur, modele):
+    def reponse(self, resultat, err, type_moteur, modele, depot):
         zone = self.chat.tag_ranges("attente")
         if zone:
             self.chat.delete(zone[0], zone[1])
         if err:
             self.messages.pop()
-            self.app.ecrire(self.chat, message_erreur(err, type_moteur, modele),
-                            lambda: True, self.fin_reponse)
+            message = erreur_github(err) if "github" in str(getattr(err, "url", "")) else \
+                message_erreur(err, type_moteur, modele)
+            self.app.ecrire(self.chat, message, lambda: True, self.fin_reponse)
             return
-        explication, fichiers = extraire_fichiers(texte or "")
+        if depot != self.depot:
+            self.messages.pop()
+            self.app.ecrire(self.chat, "T'as changé de projet pendant que je travaillais, faque "
+                                       "j'ai rien touché. Renvoie ta demande.", lambda: True, self.fin_reponse)
+            return
+        self.cache.update(resultat["lus"])
+        explication, fichiers = extraire_fichiers(resultat["texte"] or "")
         ecrits = [self.appliquer_fichier(chemin, contenu) for chemin, contenu in fichiers]
         resume = explication or ("C'est fait, regarde les fichiers." if ecrits else
                                  "Pas de réponse cette fois-ci. Reformule ta demande.")
         note = f"\n(Fichiers écrits : {', '.join(ecrits)})" if ecrits else ""
         self.messages.append({"role": "assistant", "content": resume + note})
-        self.app.ecrire(self.chat, resume, lambda: True, lambda: self.fin_reponse(ecrits))
+        self.app.ecrire(self.chat, resume, lambda: True,
+                        lambda: self.fin_reponse(ecrits, resultat["vus"]))
 
     def appliquer_fichier(self, chemin, contenu):
         """Met le fichier écrit par l'IA dans un onglet (rien part sur GitHub avant « Enregistrer »)."""
@@ -1703,7 +2276,17 @@ class CodexVue(tk.Frame):
         self.activer(o)
         return chemin
 
-    def fin_reponse(self, ecrits=()):
+    def fin_reponse(self, ecrits=(), vus=()):
+        if vus:
+            noms = ", ".join(Path(c).name for c in vus[:8]) + (f" (+{len(vus) - 8})" if len(vus) > 8 else "")
+            self.chat.insert("end", f"Fichiers lus : {noms}\n", "sources")
+        # Si t'as coché « Pousser tout seul », ça part sur GitHub sans rien demander.
+        if ecrits and self.depot and self.auto_push.get():
+            self.chat.insert("end", "J'envoie ça sur GitHub…\n", "sources")
+            self.chat.see("end")
+            self.enregistrer([o for o in self.onglets if o.chemin in set(ecrits)])
+            self.occupe = False
+            return
         for chemin in ecrits:
             etiquette = f"fichier{self.nb_liens}"
             self.nb_liens += 1
@@ -1767,7 +2350,11 @@ class AppEcriture(tk.Tk):
 
         # --- La conversation (cachée au début, modifiable) ---
         self.document = tk.Text(self, **style_zone())
-        self.configurer_tags(self.document, retrait=LOGO_AVATAR + 12 if self.logo else 0)
+        self.configurer_tags(self.document, retrait=LOGO_AVATAR + 12 if self.logo else 0,
+                             taille_reponse=TAILLE_AGENT)
+        self.document.config(yscrollcommand=self.sur_defilement_doc)
+        self.document.bind("<Configure>", lambda e: self.sur_defilement_doc())
+        self.nb_meteo = 0
 
         # --- La zone où on écrit (centrée au début) ---
         self.zone_saisie = tk.Frame(self, bg=GRIS_FOND)
@@ -1782,7 +2369,7 @@ class AppEcriture(tk.Tk):
 
         # --- Choix de l'IA, sous la boîte ---
         self.moteurs = trouver_moteurs()
-        self.choix = tk.StringVar(value=next(iter(self.moteurs)))
+        self.choix = tk.StringVar(value=self.moteur_de_depart())
         self.choix.trace_add("write", self.maj_boutons_moteur)
         self.options = tk.Frame(self.zone_saisie, bg=GRIS_FOND)
         self.options.pack(fill="x", pady=(8, 0))
@@ -1805,15 +2392,29 @@ class AppEcriture(tk.Tk):
         self.after(300, self.charger_modeles_claude)
         self.after(1500, self.verifier_maj)   # sans déranger : ça se fait en arrière-plan
 
+    def moteur_de_depart(self):
+        """Un modèle gratuit s'il y en a un, sinon celui écrit dans MODELE_CLAUDE.
+        Sans ça, on partirait sur Opus 5 — le plus cher — juste parce qu'il est premier."""
+        for etiquette, (type_moteur, _) in self.moteurs.items():
+            if type_moteur == "ollama":
+                return etiquette
+        for etiquette, (type_moteur, modele) in self.moteurs.items():
+            if modele == MODELE_CLAUDE:
+                return etiquette
+        return next(iter(self.moteurs))
+
     # ---------- Outils ----------
-    def configurer_tags(self, widget, taille=14, retrait=0):
+    def configurer_tags(self, widget, taille=14, retrait=0, taille_reponse=None):
+        taille_reponse = taille_reponse or taille
         widget.tag_configure("question", font=(FAMILLE, taille, "bold"), spacing1=14 if taille >= 14 else 10)
-        widget.tag_configure("reponse", spacing1=6, spacing3=4, lmargin1=retrait, lmargin2=retrait)
-        widget.tag_configure("attente", font=(FAMILLE, taille, "italic"), spacing1=6, lmargin2=retrait)
+        widget.tag_configure("reponse", font=(FAMILLE, taille_reponse), spacing1=6, spacing3=4,
+                             lmargin1=retrait, lmargin2=retrait)
+        widget.tag_configure("attente", font=(FAMILLE, taille_reponse, "italic"), spacing1=6,
+                             lmargin1=retrait, lmargin2=retrait)
         widget.tag_configure("sources", font=(FAMILLE, max(taille - 3, 9)), spacing1=2,
                              lmargin1=retrait, lmargin2=retrait)
         widget.tag_configure("avatar", spacing1=8)
-        widget.tag_configure("lien", underline=True)
+        widget.tag_configure("lien", underline=True, foreground=COULEUR_LIEN)
         widget.tag_configure("curseur", foreground=ORANGE)
         widget.tag_bind("lien", "<Enter>", lambda e: widget.config(cursor="hand2"))
         widget.tag_bind("lien", "<Leave>", lambda e: widget.config(cursor="xterm"))
@@ -1867,6 +2468,8 @@ class AppEcriture(tk.Tk):
 
     def ecrire(self, widget, texte, continuer, suite):
         """Écrit un texte lettre par lettre, vite pis fluide, avec un curseur orange."""
+        texte = liens_markdown_en_texte(texte)
+        debut = widget.index("end-1c")
         widget.insert("end", "▌", "curseur")
         tours = max(1, int(DUREE_ECRITURE * 1000 / VITESSE_MS))
         paquet = max(1, -(-len(texte) // tours))   # plus c'est long, plus ça écrit de lettres à la fois
@@ -1890,9 +2493,29 @@ class AppEcriture(tk.Tk):
             else:
                 widget.delete(curseur[0], curseur[1])
                 widget.insert("end", "\n", "reponse")
+                self.lier_liens(widget, debut, "end-1c")
                 suite()
 
         tour()
+
+    def lier_liens(self, widget, debut, fin):
+        """Rend cliquables les adresses web (https://… ou www.…) : un clic ouvre le site."""
+        texte = widget.get(debut, fin)
+        for m in URL_WEB.finditer(texte):
+            url = nettoyer_url(m.group(0))
+            if len(url) < 8:
+                continue
+            a, b = f"{debut}+{m.start()}c", f"{debut}+{m.start() + len(url)}c"
+            etiquette = f"lien{self.nb_liens}"
+            self.nb_liens += 1
+            widget.tag_add("lien", a, b)
+            widget.tag_add(etiquette, a, b)
+            cible = url if url.lower().startswith("http") else "https://" + url
+            widget.tag_bind(etiquette, "<Button-1>", lambda e, u=cible: webbrowser.open(u))
+
+    def sur_defilement_doc(self, *args):
+        if self.logo:
+            self.logo.recaler()
 
     # ---------- Choix de l'IA ----------
     def creer_bouton_moteur(self, parent):
@@ -1913,18 +2536,8 @@ class AppEcriture(tk.Tk):
         if relire:
             self.moteurs = trouver_moteurs()
         menu.delete(0, "end")
-        gratuits = [e for e, v in self.moteurs.items() if v[0] == "ollama"]
-        if not gratuits:
-            # Rien de gratuit : on le dit, au lieu de laisser Claude tout seul sans explication
-            menu.add_command(label="Aucune IA gratuite trouvée sur cet ordi", state="disabled")
-        for etiquette in gratuits:
+        for etiquette in self.moteurs:
             menu.add_command(label=etiquette, command=lambda e=etiquette: self.choix.set(e))
-        menu.add_separator()
-        for etiquette, valeur in self.moteurs.items():
-            if valeur[0] == "claude":
-                menu.add_command(label=etiquette, command=lambda e=etiquette: self.choix.set(e))
-        menu.add_separator()
-        menu.add_command(label="Ajouter des IA gratuites…", command=self.ouvrir_ia_gratuites)
         if self.choix.get() not in self.moteurs:
             self.choix.set(next(iter(self.moteurs)))
 
@@ -1961,6 +2574,27 @@ class AppEcriture(tk.Tk):
         if self.choix.get() not in self.moteurs:
             self.choix.set(next(iter(self.moteurs)))
         self.maj_boutons_moteur()
+
+    # ---------- Menu de gauche ----------
+    def construire_menu_lateral(self):
+        m = self.menu_lateral = tk.Frame(self, bg=GRIS_MENU)
+        m.place(x=self.menu_x, y=0, width=LARGEUR_MENU, relheight=1)
+        # Deux pages côte à côte : le menu principal pis Paramètres (qui glisse par-dessus)
+        self.page_principale = tk.Frame(m, bg=GRIS_MENU)
+        self.page_principale.place(x=0, y=0, width=LARGEUR_MENU, relheight=1)
+        self.page_parametres = tk.Frame(m, bg=GRIS_MENU)
+        self.page_parametres.place(x=LARGEUR_MENU, y=0, width=LARGEUR_MENU, relheight=1)
+        self.construire_page_principale(self.page_principale)
+        self.construire_page_parametres(self.page_parametres)
+        bord = tk.Frame(m, bg="#5e5e5e", width=2)
+        bord.place(relx=1, x=-2, y=0, relheight=1)
+        bord.lift()
+
+        self.bouton_menu = tk.Button(
+            self, text="☰", command=self.basculer_menu, bg=ORANGE, fg=NOIR,
+            activebackground=ORANGE_FONCE, activeforeground=NOIR, font=(FAMILLE, 16, "bold"),
+            relief="flat", bd=0, highlightthickness=0, cursor="hand2")
+        self.bouton_menu.place(x=15, y=14, width=46, height=38)
 
     # ---------- Menu de gauche ----------
     def construire_menu_lateral(self):
@@ -2020,6 +2654,10 @@ class AppEcriture(tk.Tk):
         toile.bind("<Enter>", suivre)
         toile.bind("<Leave>", lacher)
         return dedans
+
+    def separateur(self, parent, **pack):
+        tk.Frame(parent, bg="#5e5e5e", height=2).pack(fill="x", padx=14, **pack)
+
 
     def separateur(self, parent, **pack):
         tk.Frame(parent, bg="#5e5e5e", height=2).pack(fill="x", padx=14, **pack)
@@ -2092,6 +2730,25 @@ class AppEcriture(tk.Tk):
                                  "statut": statut, "entree": entree}
 
         tk.Frame(p, bg="#5e5e5e", height=2).pack(fill="x", padx=14, pady=(14, 0))
+        # Ta ville, pour la météo quand tu dis pas où
+        tk.Label(p, text="Ta ville (météo)", bg=GRIS_MENU, fg=NOIR, anchor="w",
+                 font=(FAMILLE, 11, "bold")).pack(fill="x", padx=16, pady=(12, 2))
+        self.statut_ville = tk.Label(p, bg=GRIS_MENU, fg=NOIR, anchor="w", justify="left",
+                                     font=(FAMILLE, 9), wraplength=LARGEUR_MENU - 36)
+        self.statut_ville.pack(fill="x", padx=16)
+        self.entree_ville = tk.Entry(p, bg=GRIS_ZONE, fg=NOIR, insertbackground=NOIR, relief="flat",
+                                     bd=0, font=(FAMILLE, 11), highlightthickness=2,
+                                     highlightbackground=GRIS_BORD, highlightcolor=ORANGE)
+        self.entree_ville.pack(fill="x", padx=16, pady=(6, 6), ipady=5)
+        self.entree_ville.bind("<Return>", lambda e: self.enregistrer_ville())
+        rang = tk.Frame(p, bg=GRIS_MENU)
+        rang.pack(fill="x", padx=16)
+        bouton_orange(rang, "Enregistrer", self.enregistrer_ville, taille=9).pack(side="left")
+        bouton_orange(rang, "Supprimer", self.supprimer_ville, taille=9).pack(side="left", padx=(8, 0))
+        tk.Label(p, text="Pour la météo quand tu dis pas où. Ex. : Normandin, Québec",
+                 bg=GRIS_MENU, fg="#2e2e2e", anchor="w", justify="left", font=(FAMILLE, 9),
+                 wraplength=LARGEUR_MENU - 36).pack(fill="x", padx=16, pady=(6, 4))
+        tk.Frame(p, bg="#5e5e5e", height=2).pack(fill="x", padx=14, pady=(14, 0))
         tk.Label(p, text="IA gratuites", bg=GRIS_MENU, fg=NOIR, anchor="w",
                  font=(FAMILLE, 11, "bold")).pack(fill="x", padx=16, pady=(12, 2))
         tk.Label(p, text="Elles tournent sur ton ordi, sans clé pis sans payer une cenne.",
@@ -2118,6 +2775,7 @@ class AppEcriture(tk.Tk):
             fill="x", padx=16, pady=(6, 16))
         self.maj_statuts()
 
+    # ---------- Mises à jour ----------
     # ---------- Mises à jour ----------
     def verifier_maj(self, annoncer=False):
         """Regarde s'il y a du neuf sur GitHub. Si l'auto est allumée, ça s'installe tout seul.
@@ -2202,6 +2860,26 @@ class AppEcriture(tk.Tk):
             else:
                 texte = "Aucune clé enregistrée" if cle else "Aucun token enregistré"
             c["statut"].config(text=texte)
+        if hasattr(self, "statut_ville"):
+            ville = lire_reglages().get("ville", "")
+            self.statut_ville.config(text=f"Ville : {ville}" if ville else "Aucune ville enregistrée")
+
+    def enregistrer_ville(self):
+        ville = " ".join(self.entree_ville.get().split())
+        if not ville:
+            self.statut_ville.config(text="Écris d'abord le nom de ta ville dans la case.")
+            return
+        reglages = lire_reglages()
+        reglages["ville"] = ville
+        enregistrer_reglages(reglages)
+        self.entree_ville.delete(0, "end")
+        self.maj_statuts()
+
+    def supprimer_ville(self):
+        reglages = lire_reglages()
+        reglages.pop("ville", None)
+        enregistrer_reglages(reglages)
+        self.maj_statuts()
 
     def enregistrer_parametre(self, quoi):
         c = self.champs[quoi]
@@ -2215,8 +2893,6 @@ class AppEcriture(tk.Tk):
         self.maj_statuts()
         if quoi == "github" and self.codex is not None:
             self.codex.nouveau_token(valeur)
-        if quoi == "claude":
-            self.charger_modeles_claude()
 
     def supprimer_parametre(self, quoi):
         c = self.champs[quoi]
@@ -2362,15 +3038,23 @@ class AppEcriture(tk.Tk):
         if self.logo:
             self.annuler_animation("logo")
             self.logo.a_gauche()
+        dernier = None
         for m in self.messages:
             if m["role"] == "user":
                 self.document.insert("end", m["content"] + "\n", "question")
             else:
-                self.avatar()
+                dernier = self.avatar()
+                debut = self.document.index("end-1c")
                 self.document.insert("end", m["content"] + "\n", "reponse")
+                self.lier_liens(self.document, debut, "end-1c")
                 self.ajouter_schema_et_sources(m.get("etapes") or [],
                                                [tuple(s) for s in m.get("sources") or []])
+                if m.get("meteo") is not None:
+                    self.ajouter_meteo(m["meteo"])   # la météo d'astheure, en direct
         self.document.see("end")
+        if self.logo and dernier:
+            self.update_idletasks()
+            self.logo.suivre(dernier, anime=False)
         self.fermer_menu()
         self.saisie.focus_set()
 
@@ -2384,6 +3068,8 @@ class AppEcriture(tk.Tk):
         self.schemas = []
         self.document.delete("1.0", "end")
         self.title("Écriture")
+        if self.logo:
+            self.logo.arreter_suivi()
 
     def historique_api(self):
         return [{"role": m["role"], "content": m["content"]} for m in self.messages]
@@ -2471,8 +3157,7 @@ class AppEcriture(tk.Tk):
         self.document.insert("end", texte + "\n", "question")
         self.messages.append({"role": "user", "content": texte})
         self.question_en_cours = texte
-        nom = nom_court(moteur)
-        self.montrer_attente(nom)
+        self.montrer_attente(nom_court(moteur))
         self.occupe = True
         threading.Thread(target=self.travail, args=(moteur, cle, self.historique_api(), self.generation),
                          daemon=True).start()
@@ -2521,14 +3206,22 @@ class AppEcriture(tk.Tk):
 
         if statut == "ok":
             texte, etapes = extraire_plan(texte, self.question_en_cours)
-            texte = texte or ("Voici le plan :" if etapes else
-                              "Pas de réponse cette fois-ci. Reformule ta question.")
+            texte, lieu_meteo = extraire_meteo(texte, self.question_en_cours)
+            texte = liens_markdown_en_texte(texte) or (
+                "Voici la météo :" if lieu_meteo is not None else "Voici le plan :" if etapes else
+                "Pas de réponse cette fois-ci. Reformule ta question.")
             self.messages.append({"role": "assistant", "content": texte, "etapes": etapes,
-                                  "sources": [list(s) for s in sources]})
+                                  "sources": [list(s) for s in sources], "meteo": lieu_meteo})
             self.sauver_session()
-            # Le schéma et les sources arrivent une fois le texte fini d'écrire
-            self.ecrire(self.document, texte, continuer,
-                        lambda: self.fin_reponse(self.ajouter_schema_et_sources(etapes, sources)))
+
+            def apres_ecriture():
+                # Le schéma, les sources pis la météo arrivent une fois le texte fini d'écrire
+                index = self.ajouter_schema_et_sources(etapes, sources)
+                if lieu_meteo is not None:
+                    self.ajouter_meteo(lieu_meteo)
+                self.fin_reponse(index)
+
+            self.ecrire(self.document, texte, continuer, apres_ecriture)
         else:
             self.messages.pop()  # la question n'a pas eu de réponse, on la retire
             self.ecrire(self.document, texte, continuer, self.fin_reponse)
@@ -2559,15 +3252,46 @@ class AppEcriture(tk.Tk):
             self.document.see(index_a_montrer)   # montre le haut du schéma
 
     def avatar(self):
-        """Petit logo Marceau devant la réponse de l'agent."""
-        if self.logo:
-            index = self.document.index("end-1c")
-            self.document.image_create(index, image=self.logo.image(LOGO_AVATAR), padx=3, align="center")
-            self.document.tag_add("avatar", index)
+        """Petit logo Marceau devant la réponse de l'agent. Retourne où il est."""
+        if not self.logo:
+            return None
+        index = self.document.index("end-1c")
+        self.document.image_create(index, image=self.logo.image(LOGO_AVATAR), padx=3, align="center")
+        self.document.tag_add("avatar", index)
+        return index
+
+    def ajouter_meteo(self, lieu):
+        """Pouvoir magique : va chercher la météo en direct pis l'affiche en carte animée."""
+        self.nb_meteo += 1
+        marque, etiquette = f"meteo{self.nb_meteo}", f"attente_meteo{self.nb_meteo}"
+        self.document.mark_set(marque, "end-1c")
+        self.document.mark_gravity(marque, "left")
+        self.document.insert("end", "Je regarde la météo…\n", ("attente", etiquette))
+        generation, ville = self.generation, lire_reglages().get("ville", "")
+
+        def fini(meteo, err):
+            if generation != self.generation:
+                return   # on a changé de conversation entre-temps
+            zone = self.document.tag_ranges(etiquette)
+            if zone:
+                self.document.delete(zone[0], zone[1])
+            if err:
+                self.document.insert(marque, message_meteo(err, lieu or ville) + "\n", "reponse")
+                return
+            carte = CarteMeteo(self.document, meteo, max(self.document.winfo_width() - 40, 460))
+            self.schemas.append(carte)   # effacée avec la conversation
+            self.document.window_create(marque, window=carte, pady=8)
+            self.document.insert(f"{marque}+1c", "\n")
+            self.document.see("end")
+            self.document.see(marque)
+
+        self.en_arriere_plan(lambda: obtenir_meteo(lieu, ville), fini)
 
     def montrer_attente(self, nom):
         self.compteur = 0
-        self.avatar()
+        index = self.avatar()
+        if index:
+            self.logo.suivre(index)   # le gros logo vient se placer à côté de la réponse
         self.texte_attente = f"{nom} réfléchit"
         self.document.insert("end", self.texte_attente + "\n", "attente")
 

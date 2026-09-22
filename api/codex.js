@@ -25,6 +25,7 @@ const CARACTERES_MAX = 60000;
 // des capacités qu'on n'a pas écrites nous autres mêmes.
 const OUTILS_CONNUS = new Set([
   "lister_fichiers", "lire_fichier", "chercher", "ecrire_fichier", "remplacer_dans_fichier",
+  "pousser_sur_github",
 ]);
 
 const QUEBECOIS =
@@ -41,8 +42,10 @@ function instructionsSysteme() {
     "deviner : avant de changer quoi que ce soit, lis le fichier. " +
     "Pour une petite correction, prends remplacer_dans_fichier plutôt que de " +
     "réécrire tout le fichier. " +
-    "Tes changements vont dans des onglets, pas directement sur GitHub : " +
-    "c'est la personne qui clique Enregistrer. Dis-le-lui quand t'as fini. " +
+    "Tes changements vont dans des onglets. Si l'outil pousser_sur_github t'est offert, " +
+    "la personne t'a donné le droit d'envoyer : appelle-le UNE SEULE FOIS à la fin, avec un " +
+    "message de commit court. S'il ne t'est pas offert, dis à la personne de cliquer " +
+    "Enregistrer quand t'as fini. " +
     "Écris en texte brut, sans Markdown, sauf les blocs de code en ```."
   );
 }

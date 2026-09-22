@@ -218,12 +218,29 @@ liste tes dépôts.
 - le code est coloré pour Python, JavaScript, HTML, CSS, JSON, shell, SQL et
   Markdown — seulement la partie visible à l'écran, pour rester rapide même sur
   un gros fichier ;
-- **Scanner** lit tout le projet pour que l'assistant voie le code en entier ;
+- **l'assistant trouve les fichiers tout seul** : t'as rien à ouvrir. Sur un petit
+  projet il lit tout; sur un gros, il demande d'abord à l'IA lesquels lire (bloc
+  `[LIRE]`), pis il peut en redemander d'autres avant d'écrire — deux tours au
+  maximum, pour pas tourner en rond ;
+- **Scanner** lit tout le projet d'un coup, si tu veux forcer ;
 - l'assistant écrit des fichiers complets dans des blocs `[FICHIER …]`, qui
   s'ouvrent en onglets **sans rien envoyer** sur GitHub ;
 - **Enregistrer** (ou `Ctrl` + `S`) envoie les onglets modifiés sur GitHub.
 
 Sans projet ouvert, **Enregistrer** écrit les fichiers sur ton ordinateur.
+
+### Pousser tout seul
+
+Par défaut, l'assistant écrit dans des onglets marqués `●` et c'est toi qui
+cliques **Enregistrer**. La case **Pousser tout seul**, dans la barre du Codex,
+lui donne le droit d'envoyer sur GitHub sans rien demander — le choix est gardé
+d'une fois à l'autre.
+
+Dans la version web, cette case ajoute carrément un sixième outil à l'agent,
+`pousser_sur_github`. Décochée, l'outil n'est **pas offert** à l'IA, et il est
+refusé une deuxième fois au moment de l'exécuter : un modèle qui essaierait de
+l'appeler pareil se fait dire non. Sans cette deuxième vérification, la case ne
+protégeait rien — c'est un test qui l'a montré.
 
 ### Le Codex web
 
@@ -237,6 +254,7 @@ Le même Codex existe dans `/app`, et il est **agentique** : au lieu de répondr
 | `lire_fichier` | ouvre un fichier au complet |
 | `ecrire_fichier` | réécrit un fichier |
 | `remplacer_dans_fichier` | corrige un passage précis, s'il n'apparaît qu'une fois |
+| `pousser_sur_github` | envoie tout d'un coup — **seulement si tu as coché la case** |
 
 Il boucle jusqu'à quatorze tours, et chaque geste s'affiche pendant qu'il
 travaille (`✓ lit src/app.js`, `✓ corrige src/vieux.js`). Ses changements vont

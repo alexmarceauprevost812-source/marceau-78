@@ -8,6 +8,7 @@
 const { $, creer, lire, ecrire, flux, moteurActuel, sansReflexion, annoncer, CLE_GITHUB } = window.Ecriture;
 
 const CLE_DEPOT = "ecriture.codexDepot";
+const CLE_AUTOPUSH = "ecriture.codexAutoPush";
 const OCTETS_MAX = 400 * 1024;     // au-delà, c'est pas du code qu'on lit dans un onglet
 const FICHIERS_SCAN = 40;          // ce qu'on donne à l'IA quand elle scanne le projet
 
@@ -203,6 +204,34 @@ function fermerOnglet(o) {
 }
 
 /* ---------- Renvoyer sur GitHub ---------- */
+/** Envoie les onglets modifiés. Retourne les chemins réussis; lève à la première erreur. */
+async function pousser(message) {
+  if (actif) actif.contenu = $("#codex-code").value;
+  const aFaire = onglets.filter(modifie);
+  if (!aFaire.length) return [];
+  etat(`Envoi de ${aFaire.length} fichier(s)…`);
+  const faits = [];
+  for (const o of aFaire) {
+    const chemin = o.chemin.split("/").map(encodeURIComponent).join("/");
+    const corps = { message, content: versBase64(o.contenu), branch: branche };
+    if (o.sha) corps.sha = o.sha;      // sans sha, GitHub crée le fichier
+    let rep;
+    try {
+      rep = await github("PUT", `/repos/${depot}/contents/${chemin}`, corps);
+    } catch (err) {
+      dessinerOnglets();
+      etat(`${o.chemin} : ${direErreur(err)}`, "mal");
+      throw new Error(`${o.chemin} : ${direErreur(err)}`);
+    }
+    o.sha = rep.content.sha;
+    o.origine = o.contenu;
+    faits.push(o.chemin);
+  }
+  dessinerOnglets();
+  etat(`${faits.length} fichier(s) enregistré(s) sur GitHub ✓`, "bien");
+  return faits;
+}
+
 async function enregistrer() {
   if (actif) actif.contenu = $("#codex-code").value;
   const aFaire = onglets.filter(modifie);
@@ -210,23 +239,8 @@ async function enregistrer() {
   const message = prompt("Message du commit :",
     aFaire.length === 1 ? `Modifie ${aFaire[0].chemin}` : `Modifie ${aFaire.length} fichiers`);
   if (message === null) return;
-  etat(`Envoi de ${aFaire.length} fichier(s)…`);
-  let faits = 0;
-  for (const o of aFaire) {
-    try {
-      const rep = await github("PUT", `/repos/${depot}/contents/${o.chemin.split("/").map(encodeURIComponent).join("/")}`, {
-        message: message || `Modifie ${o.chemin}`,
-        content: versBase64(o.contenu),
-        sha: o.sha,
-        branch: branche,
-      });
-      o.sha = rep.content.sha;
-      o.origine = o.contenu;
-      faits += 1;
-    } catch (err) { etat(`${o.chemin} : ${direErreur(err)}`, "mal"); dessinerOnglets(); return; }
-  }
-  dessinerOnglets();
-  etat(`${faits} fichier(s) enregistré(s) sur GitHub ✓`, "bien");
+  try { await pousser(message || `Modifie ${aFaire.length} fichier(s)`); }
+  catch { /* l'état affiche déjà ce qui a cloché */ }
 }
 
 /* ---------- Nouveau fichier ---------- */
@@ -372,19 +386,49 @@ const OUTILS = [
   },
 ];
 
-const parNom = Object.fromEntries(OUTILS.map((o) => [o.nom, o]));
+// Celui-là change le projet pour de vrai, donc il n'est offert que si t'as coché
+// « Pousser tout seul ». Sinon l'IA ne sait même pas qu'il existe.
+const OUTIL_POUSSER = {
+  nom: "pousser_sur_github",
+  quoi: "Envoie sur GitHub tous les fichiers que t'as modifiés, en un commit. "
+      + "Fais-le une seule fois, à la fin, quand ton travail est prêt.",
+  params: { message: { type: "string", description: "Le message du commit, court et clair." } },
+  requis: ["message"],
+  async faire({ message }) {
+    const faits = await pousser(message || "Codex : changements de l'assistant");
+    return faits.length
+      ? `Poussé sur ${depot} (${branche}) : ${faits.join(", ")}.`
+      : "Rien à pousser : aucun fichier modifié.";
+  },
+  dire: () => "pousse sur GitHub",
+};
+
+function outilsOfferts() {
+  return autoPush() ? [...OUTILS, OUTIL_POUSSER] : OUTILS;
+}
+
+const parNom = Object.fromEntries([...OUTILS, OUTIL_POUSSER].map((o) => [o.nom, o]));
+
+const autoPush = () => lire(CLE_AUTOPUSH) === "oui";
 
 function schema(o) {
   return { type: "object", properties: o.params, required: o.requis };
 }
-const outilsClaude = () => OUTILS.map((o) => ({ name: o.nom, description: o.quoi, input_schema: schema(o) }));
-const outilsOllama = () => OUTILS.map((o) => ({
+const outilsClaude = () => outilsOfferts().map((o) => ({ name: o.nom, description: o.quoi, input_schema: schema(o) }));
+const outilsOllama = () => outilsOfferts().map((o) => ({
   type: "function", function: { name: o.nom, description: o.quoi, parameters: schema(o) },
 }));
 
 async function executer(nom, args) {
-  const outil = parNom[nom];
-  if (!outil) return `Outil inconnu : ${nom}.`;
+  // On refait la vérification ici : un outil pas offert ne s'exécute pas, même si
+  // le modèle le demande. Sans ça, la case « Pousser tout seul » ne protégerait rien.
+  const outil = outilsOfferts().find((o) => o.nom === nom);
+  if (!outil) {
+    return parNom[nom]
+      ? `L'outil ${nom} n'est pas permis en ce moment. Pour pousser sur GitHub, la personne `
+        + "doit cocher « Pousser tout seul » — ou cliquer Enregistrer elle-même."
+      : `Outil inconnu : ${nom}.`;
+  }
   try { return await outil.faire(args || {}); }
   catch (err) { return "Erreur : " + (err.message === "PAS_DE_TOKEN" ? direErreur(err) : err.message); }
 }
@@ -401,8 +445,11 @@ function consignes() {
     + "Sers-t'en au lieu de deviner : avant de changer quelque chose, lis-le. "
     + "Pour une petite correction, prends remplacer_dans_fichier plutôt que de réécrire "
     + "tout le fichier. "
-    + "Tes changements vont dans des onglets, pas directement sur GitHub : c'est la "
-    + "personne qui clique Enregistrer. Dis-le-lui quand t'as fini. "
+    + (autoPush()
+        ? "Quand ton travail est prêt, appelle pousser_sur_github UNE SEULE FOIS pour tout "
+          + "envoyer d'un coup, avec un message de commit court et clair. "
+        : "Tes changements vont dans des onglets, pas directement sur GitHub : c'est la "
+          + "personne qui clique Enregistrer. Dis-le-lui quand t'as fini. ")
     + "Écris en texte brut, sans Markdown, sauf les blocs de code en ```.";
 }
 
@@ -623,6 +670,13 @@ $("#codex-cherche").oninput = dessinerArbre;
 $("#codex-enregistrer").onclick = enregistrer;
 $("#codex-nouveau").onclick = nouveauFichier;
 $("#codex-envoyer").onclick = envoyer;
+$("#codex-autopush").checked = autoPush();
+$("#codex-autopush").onchange = (e) => {
+  ecrire(CLE_AUTOPUSH, e.target.checked ? "oui" : "");
+  etat(e.target.checked
+    ? "L'assistant va pousser ses changements sur GitHub tout seul."
+    : "L'assistant écrit dans les onglets; c'est toi qui cliques Enregistrer.");
+};
 $("#codex-code").addEventListener("input", dessinerOnglets);
 $("#codex-code").addEventListener("keydown", (e) => {
   if (e.key === "Tab") {           // du code, ça s'indente avec Tab, pas ça saute ailleurs
