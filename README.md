@@ -100,12 +100,30 @@ ignore la réponse en cours si elle arrive après coup.
 Le document du haut est éditable : on peut y corriger le texte avant de le
 sauvegarder en `.txt`.
 
+## Les schémas de plan
+
+Quand la réponse décrit des étapes à suivre, elles sont redessinées sous la
+réponse en un schéma : une boîte numérotée par étape, reliées par des flèches
+où circule un courant vert lime qui allume les étapes une à une, puis
+recommence.
+
+C'est l'assistant qui décide : on lui demande de terminer sa réponse par un
+bloc `[PLAN] … [/PLAN]`, une étape courte par ligne. Le bloc est retiré du
+texte affiché. À défaut, si la question parlait de plan ou d'étapes et que la
+réponse contient une liste numérotée d'au moins trois points, elle sert de
+repli.
+
+Les réglages sont dans `SchemaAnime` : `PAS_MS` (fluidité), `IMAGES_PAR_LIEN`
+(vitesse du courant), `PAUSE_FIN` (pause avant de reboucler), `ESPACE`
+(hauteur des flèches).
+
 ## Personnaliser
 
 Les couleurs, les polices et les proportions sont regroupées en haut de
 `ecriture.py` :
 
 - `GRIS_FOND`, `GRIS_ZONE`, `GRIS_BORD`, `NOIR`, `ORANGE`, `ORANGE_FONCE`
+- `LIME`, `LIME_LUEUR`, `GRIS_BOITE`, `GRIS_LIEN` — les couleurs des schémas
 - `FAMILLE`, `POLICE`, `POLICE_BOUTON`, `POLICE_INVITE`
 - `RAYON_BOUTON`, `RAYON_ZONE` — l'arrondi des coins, en pixels (0 = carré)
 - `MARGE` (espace sous la saisie), `LARGEUR` (largeur des zones, en fraction de

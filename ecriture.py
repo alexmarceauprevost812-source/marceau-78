@@ -7,9 +7,9 @@
 
 import datetime
 import json
-import math
 import os
 import queue
+import math
 import re
 import threading
 import tkinter as tk
@@ -33,6 +33,10 @@ GRIS_BORD = "#7a7a7a"      # contour des zones
 NOIR = "#000000"
 ORANGE = "#ff7a1a"
 ORANGE_FONCE = "#e0620a"   # orange quand on clique
+LIME = "#7fff00"           # le courant vert lime dans les schémas
+LIME_LUEUR = "#92d253"     # halo autour du courant
+GRIS_BOITE = "#b8b8b8"     # boîtes des étapes
+GRIS_LIEN = "#6e6e6e"      # lignes entre les étapes (avant le courant)
 
 FAMILLE = "DejaVu Sans"
 POLICE = (FAMILLE, 14)
@@ -70,6 +74,12 @@ def instructions_systeme(web):
         texte += ("Tu n'as pas accès à Internet. Si la question demande des infos récentes "
                   "(actualité, météo, prix, horaires), dis-le franchement au lieu d'inventer "
                   f"et suggère de choisir « {NOM_CLAUDE} » dans le menu. ")
+    texte += (
+        "Quand ta réponse explique un plan d'action ou des étapes à suivre, termine-la "
+        "par un bloc exactement comme celui-ci (une étape courte par ligne, moins de 12 mots) :\n"
+        "[PLAN]\n1. Première étape\n2. Deuxième étape\n[/PLAN]\n"
+        "Ajoute ce bloc seulement s'il y a un vrai plan ou des étapes. "
+    )
     return texte + f"Date d'aujourd'hui : {aujourdhui}."
 
 
@@ -181,6 +191,150 @@ def message_erreur(err, type_moteur, modele):
     if isinstance(err, TimeoutError):
         return "La réponse a pris trop de temps. Réessaie, ou prends un modèle plus léger."
     return f"Erreur : {err}"
+
+
+# ---------- Moteur de schéma ----------
+MOTS_PLAN = re.compile(
+    r"\b(plan|étapes?|etapes?|stratégie|marche à suivre|comment (faire|je|on|lancer|commencer))\b",
+    re.I)
+
+
+def nettoyer_etape(ligne):
+    # Enlève « - », « 1. », « 2) », « Étape 3 : »… (même s'il y en a plusieurs de suite)
+    ligne = ligne.replace("**", "").strip()
+    while True:
+        propre = re.sub(r"^(?:[-•*]|\d+[.)]|étape\s*\d+\s*[:\-–]?)\s*", "", ligne, flags=re.I)
+        if propre == ligne:
+            return ligne
+        ligne = propre
+
+
+def raccourcir(texte, maxi=90):
+    phrase = re.split(r"(?<=[.!?])\s", texte)[0]  # garde la première phrase
+    return phrase if len(phrase) <= maxi else phrase[:maxi - 1].rstrip() + "…"
+
+
+def extraire_plan(texte, question):
+    """Sort les étapes d'un plan de la réponse. Retourne (texte_sans_le_bloc, étapes)."""
+    m = re.search(r"\[PLAN\](.*?)(\[/PLAN\]|$)", texte, re.S | re.I)
+    if m:
+        etapes = [raccourcir(nettoyer_etape(l)) for l in m.group(1).splitlines()]
+        etapes = [e for e in etapes if e]
+        texte = (texte[:m.start()] + texte[m.end():]).strip()
+        return texte, (etapes[:12] if len(etapes) >= 2 else [])
+    # Plan de secours : une liste 1. 2. 3. quand la question parle d'un plan
+    if MOTS_PLAN.search(question):
+        items = re.findall(r"^\s*\d+[.)]\s+(.+)$", texte, re.M)
+        if len(items) >= 3:
+            return texte, [raccourcir(nettoyer_etape(i)) for i in items[:12]]
+    return texte, []
+
+
+class SchemaAnime(tk.Canvas):
+    """Schéma d'un plan : des boîtes reliées par des lignes où passe un courant vert lime."""
+    PAS_MS = 30            # vitesse de l'animation (plus petit = plus fluide)
+    IMAGES_PAR_LIEN = 28   # temps pour que le courant passe d'une étape à l'autre
+    PAUSE_FIN = 40         # pause quand le courant arrive à la dernière étape
+    ESPACE = 44            # hauteur des lignes entre les boîtes
+
+    def __init__(self, parent, etapes, largeur):
+        super().__init__(parent, bg=GRIS_ZONE, highlightthickness=0, bd=0,
+                         width=largeur, height=10, cursor="arrow")
+        self.boites = []
+        self.liens = []
+        self.dessiner(etapes, largeur)
+        self.lien_actif = 0
+        self.progression = 0.0
+        self.pause = 0
+        self.allumer(0)
+        self.after(500, self.animer)
+
+    def rectangle_arrondi(self, x0, y0, x1, y1, r, **options):
+        points = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
+                  x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+        return self.create_polygon(points, smooth=True, **options)
+
+    def dessiner(self, etapes, largeur):
+        l_boite = min(largeur - 40, 560)
+        x0 = (largeur - l_boite) / 2
+        x1 = x0 + l_boite
+        cx = largeur / 2
+        y = 12
+        bords = []   # (haut, bas) de chaque boîte
+        for i, texte in enumerate(etapes):
+            id_texte = self.create_text(x0 + 60, y, text=texte, anchor="nw", fill=NOIR,
+                                        width=l_boite - 80, font=(FAMILLE, 12))
+            gauche, haut, droite, bas = self.bbox(id_texte)
+            h_texte = bas - haut
+            h = max(h_texte + 28, 54)
+            self.coords(id_texte, x0 + 60, y + (h - h_texte) / 2)
+            boite = self.rectangle_arrondi(x0, y, x1, y + h, 14, fill=GRIS_BOITE,
+                                           outline=GRIS_BORD, width=2)
+            self.tag_lower(boite, id_texte)
+            ny = y + h / 2
+            self.create_oval(x0 + 16, ny - 15, x0 + 46, ny + 15, fill=ORANGE, outline="")
+            self.create_text(x0 + 31, ny, text=str(i + 1), fill=NOIR, font=(FAMILLE, 11, "bold"))
+            self.boites.append(boite)
+            bords.append((y, y + h))
+            y += h + self.ESPACE
+
+        for (haut1, bas1), (haut2, bas2) in zip(bords, bords[1:]):
+            ya, yb = bas1 + 2, haut2 - 2
+            base = self.create_line(cx, ya, cx, yb, fill=GRIS_LIEN, width=3,
+                                    arrow="last", arrowshape=(10, 12, 5))
+            lueur = self.create_line(cx, ya, cx, ya, fill=LIME_LUEUR, width=10,
+                                     capstyle="round", state="hidden")
+            courant = self.create_line(cx, ya, cx, ya, fill=LIME, width=3,
+                                       capstyle="round", state="hidden")
+            etincelle = self.create_oval(cx - 5, ya - 5, cx + 5, ya + 5, fill="#eaffc4",
+                                         outline=LIME, width=2, state="hidden")
+            self.liens.append((cx, ya, yb, base, lueur, courant, etincelle))
+        self.config(height=y - self.ESPACE + 12)
+
+    def allumer(self, i):
+        if i < len(self.boites):
+            self.itemconfig(self.boites[i], outline=LIME, width=3)
+
+    def reinitialiser(self):
+        for boite in self.boites:
+            self.itemconfig(boite, outline=GRIS_BORD, width=2)
+        for cx, ya, yb, base, lueur, courant, etincelle in self.liens:
+            self.itemconfig(base, fill=GRIS_LIEN)
+            for item in (lueur, courant, etincelle):
+                self.itemconfig(item, state="hidden")
+        self.lien_actif = 0
+        self.progression = 0.0
+        self.allumer(0)
+
+    def animer(self):
+        try:
+            if not self.winfo_exists() or not self.liens:
+                return
+            if self.pause > 0:
+                self.pause -= 1
+                if self.pause == 0:
+                    self.reinitialiser()   # on recommence du début
+            else:
+                cx, ya, yb, base, lueur, courant, etincelle = self.liens[self.lien_actif]
+                self.progression = min(1.0, self.progression + 1 / self.IMAGES_PAR_LIEN)
+                yc = ya + (yb - ya) * self.progression
+                self.coords(lueur, cx, ya, cx, yc)
+                self.coords(courant, cx, ya, cx, yc)
+                self.coords(etincelle, cx - 5, yc - 5, cx + 5, yc + 5)
+                for item in (lueur, courant, etincelle):
+                    self.itemconfig(item, state="normal")
+                if self.progression >= 1:
+                    # Le courant arrive : la ligne et la prochaine étape s'allument
+                    self.itemconfig(base, fill=LIME)
+                    self.itemconfig(etincelle, state="hidden")
+                    self.lien_actif += 1
+                    self.progression = 0.0
+                    self.allumer(self.lien_actif)
+                    if self.lien_actif >= len(self.liens):
+                        self.pause = self.PAUSE_FIN
+            self.after(self.PAS_MS, self.animer)
+        except tk.TclError:
+            return   # le schéma a été effacé
 
 
 # ---------- Interface ----------
@@ -315,6 +469,9 @@ class AppEcriture(tk.Tk):
         self.compteur = 0
         self.nb_liens = 0
         self.texte_attente = ""
+        self.schemas = []            # schémas animés dans la conversation
+        self.question_en_cours = ""
+        self.index_question = "1.0"
 
         # --- Boutons du haut (cachés au début) ---
         self.barre = tk.Frame(self, bg=GRIS_FOND)
@@ -484,8 +641,10 @@ class AppEcriture(tk.Tk):
                 return "break"
 
         self.saisie.delete("1.0", "end")
+        self.index_question = self.document.index("end-1c")
         self.document.insert("end", texte + "\n", "question")
         self.historique.append({"role": "user", "content": texte})
+        self.question_en_cours = texte
         nom = "Claude" if moteur[0] == "claude" else moteur[1].removesuffix(":latest")
         self.montrer_attente(nom)
         self.occupe = True
@@ -533,9 +692,17 @@ class AppEcriture(tk.Tk):
             self.document.delete(zone[0], zone[1])
 
         if statut == "ok":
-            texte = texte or "Pas de réponse cette fois-ci. Reformule ta question."
+            texte, etapes = extraire_plan(texte, self.question_en_cours)
+            texte = texte or ("Voici le plan :" if etapes else
+                              "Pas de réponse cette fois-ci. Reformule ta question.")
             self.historique.append({"role": "assistant", "content": texte})
             self.document.insert("end", texte + "\n", "reponse")
+            if etapes:
+                largeur = max(self.document.winfo_width() - 40, 360)
+                schema = SchemaAnime(self.document, etapes, largeur)
+                self.schemas.append(schema)
+                self.document.window_create("end", window=schema, pady=8)
+                self.document.insert("end", "\n")
             if sources:
                 self.document.insert("end", "Sources :\n", "sources")
                 for titre, url in sources[:5]:
@@ -549,6 +716,7 @@ class AppEcriture(tk.Tk):
             self.historique.pop()  # la question a pas eu de réponse, on la retire
             self.document.insert("end", texte + "\n", "reponse")
         self.document.see("end")
+        self.document.see(self.index_question)
 
     def montrer_attente(self, nom):
         self.compteur = 0
@@ -604,6 +772,9 @@ class AppEcriture(tk.Tk):
         self.generation += 1
         self.occupe = False
         self.historique = []
+        for schema in self.schemas:
+            schema.destroy()
+        self.schemas = []
         self.document.delete("1.0", "end")
         self.cadre_document.place_forget()
         self.barre.place_forget()
