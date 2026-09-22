@@ -93,6 +93,7 @@ navigateur.
 | Sauvegarder la conversation | `Ctrl` + `S` (ou le bouton **Sauvegarder**) |
 | Changer d'IA | le menu orange sous la boîte |
 | Repartir de zéro | bouton **Nouveau** |
+| Ouvrir le menu des conversations | bouton **☰** |
 
 L'assistant garde le fil de la conversation, quel que soit le moteur — on peut
 commencer avec un modèle local et passer à Claude en cours de route.
@@ -109,6 +110,33 @@ ignore la réponse en cours si elle arrive après coup.
 
 Le document du haut est éditable : on peut y corriger le texte avant de le
 sauvegarder en `.txt`.
+
+## Le menu de gauche
+
+Le bouton **☰** en haut à gauche ouvre un panneau qui garde toutes tes
+conversations. Elles sont enregistrées toutes seules dans
+`~/.local/share/ecriture/sessions`, une par fichier JSON, avec leurs schémas et
+leurs sources. Un clic rouvre une conversation, un clic droit la supprime.
+
+## Le Codex
+
+Depuis le menu de gauche, **Codex </>** ouvre un éditeur de code relié à
+GitHub : l'arborescence du projet à gauche, l'éditeur au centre, un assistant à
+droite.
+
+Il faut un token GitHub *fine-grained* avec la permission **Contents : Read and
+write** (bouton **Token**, ou variable `GITHUB_TOKEN`). Ensuite **Projet ▾**
+liste tes dépôts.
+
+- le code est coloré pour Python, JavaScript, HTML, CSS, JSON, shell, SQL et
+  Markdown — seulement la partie visible à l'écran, pour rester rapide même sur
+  un gros fichier ;
+- **Scanner** lit tout le projet pour que l'assistant voie le code en entier ;
+- l'assistant écrit des fichiers complets dans des blocs `[FICHIER …]`, qui
+  s'ouvrent en onglets **sans rien envoyer** sur GitHub ;
+- **Enregistrer** (ou `Ctrl` + `S`) envoie les onglets modifiés sur GitHub.
+
+Sans projet ouvert, **Enregistrer** écrit les fichiers sur ton ordinateur.
 
 ## Les schémas de plan
 
