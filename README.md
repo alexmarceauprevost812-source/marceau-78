@@ -5,10 +5,11 @@ assistant qui répond aux questions.
 
 Page de présentation : <https://marceau-78.vercel.app>
 
-Deux moteurs au choix, dans un menu sous la boîte de saisie :
+Plusieurs agents au choix, dans un menu sous la boîte de saisie :
 
 - **les modèles locaux d'Ollama** — gratuits, hors ligne, sur ta machine
-- **Claude + recherche web** — payant, mais il va chercher l'info à jour
+- **les modèles Claude** — payants, mais avec la recherche web : Opus 5,
+  Sonnet 5, Haiku 4.5, Fable 5.1
 
 La zone de saisie démarre au centre, sous le logo. Dès la première question,
 elle glisse vers le bas et la conversation apparaît au-dessus, dans un document
@@ -74,9 +75,10 @@ que d'inventer quand la question porte sur quelque chose de récent.
 Ce moteur appelle l'API Claude, qui est payante. Il faut une clé (`sk-ant-…`)
 obtenue sur <https://console.anthropic.com>.
 
-À la première question, l'application la demande et l'enregistre dans
+Branche-la dans **☰ → Paramètres**. Elle est enregistrée dans
 `~/.config/ecriture/cle_api`, en clair, avec les droits `600` (lisible
-uniquement par ton compte). Le bouton **Clé API** permet de la changer.
+uniquement par ton compte). Si tu poses une question sans clé, l'application
+ouvre la page Paramètres toute seule et garde ta question dans la boîte.
 
 Si aucun fichier n'existe, la variable d'environnement `ANTHROPIC_API_KEY` est
 utilisée à la place :
@@ -98,7 +100,7 @@ navigateur.
 | Changer d'IA | le menu orange sous la boîte |
 | Repartir de zéro | bouton **Nouveau** |
 | Ouvrir le menu des conversations | bouton **☰** |
-| Brancher la clé API ou le token | bouton **Paramètres ⚙** |
+| Brancher la clé API ou le token | **☰** puis **Paramètres** |
 
 L'assistant garde le fil de la conversation, quel que soit le moteur — on peut
 commencer avec un modèle local et passer à Claude en cours de route.
@@ -128,31 +130,52 @@ facultatif : sans lui, Tkinter divise la taille par un nombre entier.
 
 ## Le menu de gauche
 
-Le bouton **☰** en haut à gauche ouvre un panneau qui garde toutes tes
-conversations. Elles sont enregistrées toutes seules dans
-`~/.local/share/ecriture/sessions`, une par fichier JSON, avec leurs schémas et
-leurs sources. Un clic rouvre une conversation, un clic droit la supprime.
+Le bouton **☰** en haut à gauche ouvre un panneau à deux pages qui glissent
+l'une sur l'autre :
+
+- **Chat** et **Codex </>** en haut, pour passer de l'un à l'autre — le bouton
+  actif est en orange ;
+- tes conversations au milieu. Elles sont enregistrées toutes seules dans
+  `~/.local/share/ecriture/sessions`, une par fichier JSON, avec leurs schémas
+  et leurs sources. Un clic en rouvre une, un clic droit la supprime ;
+- **Paramètres** tout en bas, qui fait glisser la seconde page.
 
 ## Paramètres
 
-Le bouton **Paramètres ⚙**, en bas du menu de gauche (ou en haut de l'écran une
-fois la conversation commencée), regroupe les deux branchements :
+La page **Paramètres** du menu regroupe les deux branchements :
 
 | | Pour quoi | Où la prendre |
 | --- | --- | --- |
 | Clé API Claude | l'IA payante avec recherche web | <https://console.anthropic.com> |
 | Token GitHub | le Codex | *Settings → Developer settings → Fine-grained tokens*, permission **Contents : Read and write** |
 
-La fenêtre dit pour chacune si elle est branchée et d'où elle vient (fichier sur
-l'ordi, ou variable d'environnement) — **sans jamais réafficher la valeur**. Un
-champ laissé vide n'est pas touché ; **Effacer** supprime ce qui est enregistré.
+Chaque ligne dit si c'est branché et d'où ça vient (fichier sur l'ordi, ou
+variable d'environnement), **sans jamais réafficher la valeur** — seulement les
+quatre derniers caractères. Quand une clé manque, l'application ouvre cette page
+toute seule au lieu de refuser sans rien dire, et ta question reste dans la
+boîte.
 
 Les deux sont écrites dans `~/.config/ecriture`, en mode `600` : lisibles
 uniquement par ton compte. Rien ne part ailleurs.
 
+## Le choix de l'agent
+
+Le menu sous la boîte de saisie liste, dans l'ordre :
+
+1. les **modèles Ollama** installés, gratuits ;
+2. les **modèles Claude**, payants — Opus 5 (le plus capable), Sonnet 5 (bon
+   partout, moins cher), Haiku 4.5 (le plus rapide) et Fable 5.1 (les tâches
+   longues), chacun avec ce qu'il vaut ;
+3. **Ajouter des IA gratuites…**, pour en installer d'autres.
+
+Dès qu'une clé Claude est branchée, la liste des Claude est remplacée en
+arrière-plan par celle que l'API renvoie vraiment pour cette clé : tu ne vois
+que ce à quoi tu as accès. Sans clé, c'est la liste écrite dans
+`MODELES_CLAUDE`, en haut du fichier.
+
 ## Les IA gratuites
 
-Si le menu sous la boîte d'écriture ne propose que Claude, c'est qu'Ollama ne
+Si le menu ne propose aucun modèle gratuit, c'est qu'Ollama ne
 tourne pas sur cette machine — le menu le dit maintenant en toutes lettres,
 au lieu de laisser Claude tout seul sans explication.
 
@@ -277,7 +300,8 @@ Les couleurs, les polices et les proportions sont regroupées en haut de
 
 Puis les réglages des IA :
 
-- `MODELE_CLAUDE`, `URL_CLAUDE`, `URL_OLLAMA`, `FICHIER_CLE`
+- `MODELE_CLAUDE` (celui choisi au démarrage), `MODELES_CLAUDE` (ceux offerts
+  dans le menu), `URL_CLAUDE`, `URL_OLLAMA`, `FICHIER_CLE`
 - `RECHERCHES_MAX` — recherches web maximum par question
 - `NOM_CLAUDE` — le nom affiché dans le menu
 - `STYLE_QUEBECOIS` — `False` pour du français standard
