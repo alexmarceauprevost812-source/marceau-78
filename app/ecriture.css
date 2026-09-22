@@ -348,6 +348,17 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .codex-question:first-child { margin-top: 0; }
 .codex-reponse { white-space: pre-wrap; margin: 0 0 8px; line-height: 1.5; }
 .codex-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+
+/* Ce que l'agent est en train de faire, geste par geste. */
+.codex-travaux:not(:empty) {
+  background: #8a8a8a; border-radius: 10px; padding: 7px 10px; margin: 4px 0 8px;
+}
+.codex-geste {
+  font-size: .76rem; line-height: 1.55;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.codex-geste.mal { color: #5a1d00; font-weight: 700; white-space: normal; }
 .codex-bas { padding-top: 8px; }
 .codex-bas .boite { width: 100%; font-size: .82rem; border-radius: 12px; }
 .codex-rang { display: flex; align-items: center; gap: 8px; margin-top: 8px; }

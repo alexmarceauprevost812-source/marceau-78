@@ -241,22 +241,169 @@ function nouveauFichier() {
   etat(`${onglet.chemin} — nouveau, pas encore sur GitHub`);
 }
 
+/* ---------- Les outils que l'IA peut se servir elle-même ---------- */
+// Chaque outil est décrit une fois, pis traduit dans les deux formats :
+// celui de Claude et celui d'Ollama (qui suit le style OpenAI).
+const cacheBlobs = new Map();      // sha -> texte, pour pas relire deux fois
+
+async function lireParChemin(chemin) {
+  const ouvert = onglets.find((o) => o.chemin === chemin);
+  if (ouvert) return ouvert === actif ? $("#codex-code").value : ouvert.contenu;
+  const f = arbre.find((x) => x.chemin === chemin);
+  if (!f) throw new Error(`Pas de fichier « ${chemin} » dans ce projet.`);
+  if (cacheBlobs.has(f.sha)) return cacheBlobs.get(f.sha);
+  const data = await github("GET", `/repos/${depot}/git/blobs/${f.sha}`);
+  let texte;
+  try { texte = versTexte(data.content); }
+  catch { throw new Error(`« ${chemin} » n'est pas du texte.`); }
+  cacheBlobs.set(f.sha, texte);
+  return texte;
+}
+
+/** Met un contenu dans un onglet (sans toucher à GitHub : c'est toi qui commites). */
+function poserDansOnglet(chemin, contenu) {
+  let o = onglets.find((x) => x.chemin === chemin);
+  if (!o) {
+    const f = arbre.find((x) => x.chemin === chemin);
+    o = { chemin, contenu: "", origine: f ? null : null, sha: f ? f.sha : undefined };
+    if (f) o.origine = cacheBlobs.get(f.sha) ?? "";
+    onglets.push(o);
+  }
+  o.contenu = contenu;
+  if (o === actif) $("#codex-code").value = contenu;
+  activer(o);
+  return o;
+}
+
+const OUTILS = [
+  {
+    nom: "lister_fichiers",
+    quoi: "Donne la liste des fichiers du projet. Sers-toi de « motif » pour filtrer "
+        + "(ex. : « .js » ou « src/ »). Commence toujours par ça pour voir le projet.",
+    params: { motif: { type: "string", description: "Filtre optionnel sur le chemin." } },
+    requis: [],
+    async faire({ motif }) {
+      const vus = motif ? arbre.filter((f) => f.chemin.toLowerCase().includes(motif.toLowerCase())) : arbre;
+      if (!vus.length) return "Aucun fichier qui correspond.";
+      return `${vus.length} fichier(s) :\n` + vus.slice(0, 400)
+        .map((f) => `${f.chemin} (${Math.max(1, Math.round(f.taille / 1024))} Ko)`).join("\n");
+    },
+    dire: ({ motif }) => motif ? `liste les fichiers « ${motif} »` : "liste le projet",
+  },
+  {
+    nom: "lire_fichier",
+    quoi: "Lit un fichier du projet au complet.",
+    params: { chemin: { type: "string", description: "Le chemin exact, tel que listé." } },
+    requis: ["chemin"],
+    async faire({ chemin }) {
+      const texte = await lireParChemin(chemin);
+      return `--- ${chemin} ---\n${texte.slice(0, 60000)}`;
+    },
+    dire: ({ chemin }) => `lit ${chemin}`,
+  },
+  {
+    nom: "chercher",
+    quoi: "Cherche un bout de texte dans tout le projet et dit dans quels fichiers "
+        + "et à quelles lignes il apparaît. C'est comme ça que tu scannes un gros projet "
+        + "sans tout lire.",
+    params: {
+      texte: { type: "string", description: "Ce qu'on cherche." },
+      motif: { type: "string", description: "Filtre optionnel sur les chemins de fichiers." },
+    },
+    requis: ["texte"],
+    async faire({ texte, motif }) {
+      const cibles = (motif ? arbre.filter((f) => f.chemin.includes(motif)) : arbre)
+        .filter((f) => f.taille < 200 * 1024).slice(0, 120);
+      const bas = texte.toLowerCase();
+      const trouves = [];
+      for (const f of cibles) {
+        let contenu;
+        try { contenu = await lireParChemin(f.chemin); } catch { continue; }
+        contenu.split("\n").forEach((ligne, i) => {
+          if (ligne.toLowerCase().includes(bas) && trouves.length < 60) {
+            trouves.push(`${f.chemin}:${i + 1}: ${ligne.trim().slice(0, 200)}`);
+          }
+        });
+      }
+      return trouves.length
+        ? `${trouves.length} résultat(s) :\n` + trouves.join("\n")
+        : `Rien trouvé pour « ${texte} » dans ${cibles.length} fichier(s).`;
+    },
+    dire: ({ texte }) => `cherche « ${texte} »`,
+  },
+  {
+    nom: "ecrire_fichier",
+    quoi: "Écrit un fichier au complet. Ça ouvre le fichier dans un onglet marqué "
+        + "modifié — c'est la personne qui clique Enregistrer pour l'envoyer sur GitHub. "
+        + "Sers-toi de remplacer_dans_fichier pour une petite correction.",
+    params: {
+      chemin: { type: "string", description: "Le chemin du fichier." },
+      contenu: { type: "string", description: "Tout le nouveau contenu." },
+    },
+    requis: ["chemin", "contenu"],
+    async faire({ chemin, contenu }) {
+      if (arbre.some((f) => f.chemin === chemin)) await lireParChemin(chemin);  // pour garder l'original
+      poserDansOnglet(chemin, contenu);
+      return `${chemin} écrit dans un onglet (${contenu.split("\n").length} lignes). `
+           + "Pas encore sur GitHub : la personne doit cliquer Enregistrer.";
+    },
+    dire: ({ chemin }) => `écrit ${chemin}`,
+  },
+  {
+    nom: "remplacer_dans_fichier",
+    quoi: "Remplace un bout de texte exact dans un fichier. Le texte cherché doit "
+        + "apparaître une seule fois. C'est la meilleure façon de corriger quelque chose.",
+    params: {
+      chemin: { type: "string", description: "Le chemin du fichier." },
+      avant: { type: "string", description: "Le texte exact à remplacer, tel quel." },
+      apres: { type: "string", description: "Ce qui le remplace." },
+    },
+    requis: ["chemin", "avant", "apres"],
+    async faire({ chemin, avant, apres }) {
+      const texte = await lireParChemin(chemin);
+      const combien = texte.split(avant).length - 1;
+      if (combien === 0) return `Ce texte-là n'est pas dans ${chemin}. Relis le fichier avant.`;
+      if (combien > 1) return `Ce texte apparaît ${combien} fois dans ${chemin}. `
+                            + "Donne-m'en un plus long, qui n'apparaît qu'une fois.";
+      poserDansOnglet(chemin, texte.replace(avant, apres));
+      return `${chemin} corrigé. Pas encore sur GitHub : la personne doit cliquer Enregistrer.`;
+    },
+    dire: ({ chemin }) => `corrige ${chemin}`,
+  },
+];
+
+const parNom = Object.fromEntries(OUTILS.map((o) => [o.nom, o]));
+
+function schema(o) {
+  return { type: "object", properties: o.params, required: o.requis };
+}
+const outilsClaude = () => OUTILS.map((o) => ({ name: o.nom, description: o.quoi, input_schema: schema(o) }));
+const outilsOllama = () => OUTILS.map((o) => ({
+  type: "function", function: { name: o.nom, description: o.quoi, parameters: schema(o) },
+}));
+
+async function executer(nom, args) {
+  const outil = parNom[nom];
+  if (!outil) return `Outil inconnu : ${nom}.`;
+  try { return await outil.faire(args || {}); }
+  catch (err) { return "Erreur : " + (err.message === "PAS_DE_TOKEN" ? direErreur(err) : err.message); }
+}
+
 /* ---------- L'assistant ---------- */
 function consignes() {
   const ouvert = actif ? `Le fichier ouvert est ${actif.chemin}.` : "Aucun fichier n'est ouvert.";
-  return "Tu es l'assistant Codex d'une application d'écriture. " + window.Ecriture.QUEBECOIS +
-    "Tu aides à lire, écrire pis corriger du code. " +
-    `Le projet est ${depot || "(aucun)"}, branche ${branche || "(aucune)"}. ${ouvert} ` +
-    "Quand tu donnes du code, mets-le dans un bloc ```langage. " +
-    "Quand tu réécris un fichier au complet, commence le bloc par une ligne " +
-    "« // fichier: chemin/du/fichier » pour que je sache où le mettre.";
-}
-
-function contexte() {
-  const bouts = [];
-  if (actif) bouts.push(`Fichier ouvert — ${actif.chemin} :\n\`\`\`\n${$("#codex-code").value.slice(0, 24000)}\n\`\`\``);
-  else if (arbre.length) bouts.push("Fichiers du projet :\n" + arbre.slice(0, FICHIERS_SCAN).map((f) => "- " + f.chemin).join("\n"));
-  return bouts.join("\n\n");
+  return "Tu es l'assistant Codex : tu travailles dans un vrai projet GitHub. "
+    + window.Ecriture.QUEBECOIS
+    + `Le projet est ${depot || "(aucun)"}, branche ${branche || "(aucune)"}. ${ouvert} `
+    + "T'as des outils : lister_fichiers pour voir le projet, chercher pour trouver du "
+    + "texte partout sans tout lire, lire_fichier pour en ouvrir un, ecrire_fichier pour "
+    + "en réécrire un au complet, et remplacer_dans_fichier pour une correction précise. "
+    + "Sers-t'en au lieu de deviner : avant de changer quelque chose, lis-le. "
+    + "Pour une petite correction, prends remplacer_dans_fichier plutôt que de réécrire "
+    + "tout le fichier. "
+    + "Tes changements vont dans des onglets, pas directement sur GitHub : c'est la "
+    + "personne qui clique Enregistrer. Dis-le-lui quand t'as fini. "
+    + "Écris en texte brut, sans Markdown, sauf les blocs de code en ```.";
 }
 
 function dessinerJase() {
@@ -275,44 +422,158 @@ function dessinerJase() {
   boite.scrollTop = boite.scrollHeight;
 }
 
+const TOURS_AGENT = 14;        // assez pour scanner un projet, pas assez pour tourner en rond
+
+/* ---------- Appeler l'IA, avec les outils ---------- */
+async function appelerClaude(conversation, modele) {
+  const cle = lire("ecriture.cleClaude");
+  const entetes = { "content-type": "application/json" };
+  let url, corps;
+  if (cle) {
+    url = "https://api.anthropic.com/v1/messages";
+    Object.assign(entetes, {
+      "x-api-key": cle, "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    });
+    corps = { model: modele, max_tokens: 8000, system: consignes(),
+              messages: conversation, tools: outilsClaude() };
+  } else {
+    // Pas de clé à toi : c'est le serveur du site qui paie, donc c'est lui qui
+    // écrit les consignes. On ne lui envoie que la conversation et les outils.
+    url = "/api/codex";
+    const code = lire("ecriture.code");
+    if (code) entetes["x-code-acces"] = code;
+    corps = { messages: conversation, modele, outils: outilsClaude() };
+  }
+  const rep = await fetch(url, { method: "POST", headers: entetes, body: JSON.stringify(corps) });
+  const data = await rep.json().catch(() => ({}));
+  if (!rep.ok) throw new Error(data?.error?.message || data?.erreur || `Erreur ${rep.status}`);
+  return data;
+}
+
+async function appelerOllama(conversation, modele) {
+  const rep = await fetch("http://localhost:11434/api/chat", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: modele, stream: false, tools: outilsOllama(),
+      messages: [{ role: "system", content: consignes() }, ...conversation],
+    }),
+  });
+  if (!rep.ok) throw new Error(`Ollama a répondu ${rep.status}.`);
+  return rep.json();
+}
+
+/* ---------- La boucle : l'IA se sert de ses outils jusqu'à avoir fini ---------- */
 async function envoyer() {
   if (occupe) return;
   const saisie = $("#codex-saisie");
   const question = saisie.value.trim();
   if (!question) return;
+  if (!depot) { etat("Ouvre d'abord un projet.", "mal"); return; }
+
   saisie.value = "";
   occupe = true;
+  $("#codex-envoyer").disabled = true;
   jase.push({ role: "user", content: question });
   dessinerJase();
 
   const boite = $("#codex-chat");
-  const para = creer("div", "codex-reponse");
-  para.textContent = "…";
+  const travaux = creer("div", "codex-travaux");
+  boite.append(travaux);
+  const para = creer("div", "codex-reponse", "…");
   boite.append(para);
-  boite.scrollTop = boite.scrollHeight;
+  const versLeBas = () => { boite.scrollTop = boite.scrollHeight; };
+  versLeBas();
 
-  const pourLIA = jase.map((m) => ({ role: m.role, content: m.content }));
-  const bout = contexte();
-  if (bout) pourLIA[pourLIA.length - 1] = {
-    role: "user", content: `${bout}\n\nMa question : ${question}`,
+  const geste = (texte, sorte = "") => {
+    const l = creer("div", "codex-geste " + sorte, texte);
+    travaux.append(l);
+    versLeBas();
+    return l;
   };
 
-  let brut = "";
-  try {
-    for await (const bloc of flux(moteurActuel(), pourLIA, { systeme: consignes(), mode: "codex" })) {
-      if (bloc.type === "texte") { brut += bloc.t; para.textContent = sansReflexion(brut); }
-      else if (bloc.type === "erreur") { para.textContent = bloc.message; brut = ""; break; }
-      boite.scrollTop = boite.scrollHeight;
-    }
-  } catch (err) { para.textContent = "Erreur : " + err.message; brut = ""; }
+  const moteur = moteurActuel();
+  const ollama = moteur.type === "ollama";
+  // Le contexte de départ : la liste des fichiers, pour qu'il sache où il est.
+  const depart = `Projet ${depot} (branche ${branche}), ${arbre.length} fichiers.\n`
+    + arbre.slice(0, 120).map((f) => "- " + f.chemin).join("\n")
+    + (arbre.length > 120 ? `\n… et ${arbre.length - 120} autres (sers-toi de lister_fichiers).` : "")
+    + (actif ? `\n\nLe fichier ouvert est ${actif.chemin}.` : "")
+    + `\n\nMa demande : ${question}`;
 
-  const reponse = sansReflexion(brut).trim();
+  let conversation = ollama
+    ? [{ role: "user", content: depart }]
+    : [{ role: "user", content: depart }];
+  let reponse = "";
+
+  try {
+    for (let tour = 0; tour < TOURS_AGENT; tour++) {
+      para.textContent = tour ? "…" : "Je regarde le projet…";
+      const data = ollama
+        ? await appelerOllama(conversation, moteur.modele)
+        : await appelerClaude(conversation, moteur.modele);
+
+      /* ----- Ollama : style OpenAI ----- */
+      if (ollama) {
+        const m = data.message || {};
+        const texte = sansReflexion(m.content || "").trim();
+        const appels = m.tool_calls || [];
+        if (texte) reponse = texte;
+        if (!appels.length) break;
+        conversation.push({ role: "assistant", content: m.content || "", tool_calls: appels });
+        for (const a of appels) {
+          const nom = a.function?.name;
+          let args = a.function?.arguments;
+          if (typeof args === "string") { try { args = JSON.parse(args); } catch { args = {}; } }
+          const ligne = geste("⟳ " + (parNom[nom]?.dire(args || {}) ?? nom));
+          const resultat = await executer(nom, args);
+          ligne.textContent = "✓ " + (parNom[nom]?.dire(args || {}) ?? nom);
+          conversation.push({ role: "tool", content: String(resultat).slice(0, 40000) });
+        }
+        continue;
+      }
+
+      /* ----- Claude : blocs tool_use ----- */
+      const blocs = data.content || [];
+      const texte = blocs.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+      if (texte) { reponse = texte; para.textContent = texte; versLeBas(); }
+      const appels = blocs.filter((b) => b.type === "tool_use");
+      if (!appels.length) break;
+
+      conversation.push({ role: "assistant", content: blocs });
+      const resultats = [];
+      for (const a of appels) {
+        const ligne = geste("⟳ " + (parNom[a.name]?.dire(a.input || {}) ?? a.name));
+        const resultat = await executer(a.name, a.input);
+        ligne.textContent = "✓ " + (parNom[a.name]?.dire(a.input || {}) ?? a.name);
+        resultats.push({ type: "tool_result", tool_use_id: a.id,
+                         content: String(resultat).slice(0, 40000) });
+      }
+      conversation.push({ role: "user", content: resultats });
+      if (tour === TOURS_AGENT - 1) {
+        geste("J'arrête ici : ça fait pas mal de tours. Redemande si c'est pas fini.", "mal");
+      }
+    }
+  } catch (err) {
+    para.textContent = "Erreur : " + err.message;
+    if (ollama) geste("Ce modèle-là ne sait peut-être pas se servir d'outils. "
+                    + "Essaie qwen3, llama3.2 ou mistral — ou Claude.", "mal");
+    occupe = false;
+    $("#codex-envoyer").disabled = false;
+    return;
+  }
+
   if (reponse) {
     jase.push({ role: "assistant", content: reponse });
     para.textContent = reponse;
     ajouterBoutonsCode(para, reponse);
+  } else {
+    para.textContent = "C'est fait.";
   }
+  dessinerOnglets();
+  versLeBas();
   occupe = false;
+  $("#codex-envoyer").disabled = false;
 }
 
 /** Chaque bloc de code de la réponse reçoit un bouton pour l'appliquer. */

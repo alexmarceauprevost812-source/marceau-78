@@ -225,6 +225,32 @@ liste tes dépôts.
 
 Sans projet ouvert, **Enregistrer** écrit les fichiers sur ton ordinateur.
 
+### Le Codex web
+
+Le même Codex existe dans `/app`, et il est **agentique** : au lieu de répondre
+à partir de ce qu'on lui a montré, il se sert lui-même de cinq outils.
+
+| Outil | Ce qu'il fait |
+| --- | --- |
+| `lister_fichiers` | voit le projet, avec un filtre optionnel |
+| `chercher` | trouve un bout de texte partout, sans tout lire |
+| `lire_fichier` | ouvre un fichier au complet |
+| `ecrire_fichier` | réécrit un fichier |
+| `remplacer_dans_fichier` | corrige un passage précis, s'il n'apparaît qu'une fois |
+
+Il boucle jusqu'à quatorze tours, et chaque geste s'affiche pendant qu'il
+travaille (`✓ lit src/app.js`, `✓ corrige src/vieux.js`). Ses changements vont
+dans des **onglets marqués modifiés** — jamais directement sur GitHub. C'est toi
+qui cliques **Enregistrer**, avec ton message de commit.
+
+Ça marche avec Claude (blocs `tool_use`) et avec les modèles Ollama qui gèrent
+les outils, comme `qwen3`, `llama3.2` ou `mistral`. Un modèle local sans
+support d'outils répondra quand même, mais sans se servir du projet.
+
+**Le token GitHub ne quitte jamais ton appareil.** `api.github.com` répond avec
+`Access-Control-Allow-Origin: *`, faque le navigateur l'appelle directement :
+le serveur du site ne voit ni ton token, ni ton code.
+
 ## Les schémas de plan
 
 Quand la réponse décrit des étapes à suivre, elles sont redessinées sous la
@@ -257,6 +283,11 @@ le disque.
 | **Ollama** | ton navigateur → `localhost:11434` | rien |
 | **Claude (ta clé)** | ton navigateur → `api.anthropic.com` | ta question, vers Anthropic |
 | **Claude (clé du site)** | ton navigateur → `/api/chat` → Anthropic | ta question, via le serveur |
+| **Codex** | ton navigateur → `api.github.com` | rien : ton token reste ici |
+
+Quand le Codex se sert de la clé du site, il passe par `/api/codex`, qui écrit
+ses propres consignes et n'accepte que les cinq noms d'outils connus : la clé du
+propriétaire ne devient pas un passe-partout.
 
 **Ta clé Claude ne quitte jamais ton appareil.** Elle est gardée dans le
 navigateur, et c'est le navigateur qui appelle l'API directement — le serveur du
