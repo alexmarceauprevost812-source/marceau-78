@@ -56,6 +56,23 @@
       <p class="fin" id="mot-cle"></p>
 
       <hr class="trait">
+      <h2>Token GitHub</h2>
+      <p class="etat non" id="etat-github">Aucun token sur cet appareil</p>
+      <p class="fin">Pour le Codex. Lui aussi reste dans ce navigateur&nbsp;:
+        <strong>le navigateur parle à GitHub directement.</strong>
+        Fais-en un sur <a href="https://github.com/settings/personal-access-tokens/new"
+        target="_blank" rel="noopener">github.com</a>, avec la permission
+        <strong>Contents&nbsp;: Read and write</strong>.</p>
+      <input class="champ" id="token-github" type="password" autocomplete="off"
+             spellcheck="false" placeholder="github_pat_…" aria-label="Ton token GitHub">
+      <label class="coche"><input type="checkbox" id="montrer-token"> Montrer</label>
+      <div class="rang-boutons">
+        <button class="bouton petit" id="enregistrer-token">Enregistrer</button>
+        <button class="bouton petit" id="supprimer-token">Supprimer</button>
+      </div>
+      <p class="fin" id="mot-token"></p>
+
+      <hr class="trait">
       <h2>IA gratuites (Ollama)</h2>
       <p class="etat non" id="etat-ollama">Vérification…</p>
       <div id="aide-ollama" hidden>
@@ -95,20 +112,56 @@
 
 <main class="doc" id="doc" aria-live="polite"></main>
 
-<!-- Le Codex : il a besoin de GitHub sur ta machine, donc il vit dans l'app d'ordi. -->
-<div class="panneau" id="panneau-codex" hidden>
-  <div class="dedans">
-    <button class="fermer" id="fermer-codex" aria-label="Fermer">×</button>
-    <h2><span class="pic">▤</span> Codex</h2>
-    <p>Le Codex ouvre un projet GitHub, colore le code, pis laisse l'IA le lire,
-      l'écrire pis le corriger avec toi.</p>
-    <p>Il travaille dans tes fichiers, faque il vit dans la version ordinateur —
-      c'est la même app, avec le même menu.</p>
-    <p><a class="bouton" href="/ecriture.py" download>⬇ Télécharger Écriture</a></p>
-    <p class="fin">Un seul fichier. Tu l'ouvres avec <code>python3 ecriture.py</code>
-      et il se tient à jour tout seul après.</p>
+<!-- ---------- Le Codex ---------- -->
+<section class="codex" id="codex">
+  <div class="codex-barre">
+    <button class="bouton petit" id="codex-projet">Projet…</button>
+    <strong class="codex-nom" id="codex-nom">Aucun projet</strong>
+    <span class="codex-etat" id="codex-etat"></span>
+    <button class="bouton petit" id="codex-nouveau">+ Fichier</button>
+    <button class="bouton petit" id="codex-enregistrer" disabled>Enregistrer</button>
+    <button class="fermer" id="codex-fermer" aria-label="Fermer le Codex">×</button>
   </div>
-</div>
+
+  <div class="codex-corps">
+    <aside class="codex-fichiers">
+      <input class="champ" id="codex-cherche" type="search" placeholder="Chercher un fichier…"
+             aria-label="Chercher un fichier">
+      <div class="codex-arbre" id="codex-arbre"></div>
+    </aside>
+
+    <div class="codex-centre">
+      <div class="codex-onglets" id="codex-onglets"></div>
+      <textarea class="codex-code" id="codex-code" spellcheck="false" disabled
+                aria-label="Le code du fichier ouvert"></textarea>
+    </div>
+
+    <aside class="codex-assistant">
+      <h3>Assistant Codex</h3>
+      <div class="codex-chat" id="codex-chat"></div>
+      <div class="codex-bas">
+        <textarea class="boite" id="codex-saisie" rows="3"
+                  placeholder="Scanne le projet, corrige le bogue, écris-moi ça…"
+                  aria-label="Ta demande au Codex"></textarea>
+        <div class="codex-rang">
+          <select class="moteur" id="codex-moteur" aria-label="Quelle IA répond"></select>
+          <button class="bouton petit" id="codex-envoyer">Envoyer</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- La liste de tes projets GitHub -->
+  <div class="codex-choix" id="codex-choix" hidden>
+    <div class="dedans">
+      <button class="fermer" id="codex-choix-fermer" aria-label="Fermer">×</button>
+      <h3>Tes projets GitHub</h3>
+      <input class="champ" id="codex-filtre" type="search" placeholder="Filtrer…"
+             aria-label="Filtrer les projets">
+      <ul class="codex-projets" id="codex-projets"></ul>
+    </div>
+  </div>
+</section>
 
 <div class="composeur" id="composeur">
   <img class="marque" src="/logo_marceau.png" alt="" width="160" height="160">
@@ -127,5 +180,6 @@
 <div class="annonce" id="annonce" hidden></div>
 
 <script src="/app/ecriture.js"></script>
+<script src="/app/codex.js"></script>
 </body>
 </html>

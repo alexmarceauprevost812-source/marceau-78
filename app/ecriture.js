@@ -17,6 +17,7 @@ const saisie = $("#saisie");
 const menu = $("#menu");
 const listeSessions = $("#sessions");
 const choixMoteur = $("#moteur");
+const moteurCodex = $("#codex-moteur");
 
 const URL_OLLAMA = "http://localhost:11434";
 // Les modèles Claude offerts. Prix par million de mots-jetons (entrée / sortie).
@@ -145,16 +146,28 @@ async function construireMoteurs() {
   }
 
   const garde = lire(CLE_MOTEUR);
-  choixMoteur.replaceChildren();
-  for (const m of moteurs) {
-    const option = creer("option", null, m.nom);
-    option.value = m.id;
-    choixMoteur.append(option);
-  }
-  choixMoteur.value = moteurs.some((m) => m.id === garde) ? garde
+  const choisi = moteurs.some((m) => m.id === garde) ? garde
     : (installes.length ? moteurs[0].id : "claude:claude-sonnet-5");
+  // Deux sélecteurs, le même choix : celui sous la boîte et celui du Codex.
+  for (const select of [choixMoteur, moteurCodex]) {
+    if (!select) continue;
+    select.replaceChildren(...moteurs.map((m) => {
+      const option = creer("option", null, m.nom);
+      option.value = m.id;
+      return option;
+    }));
+    select.value = choisi;
+  }
   majAstuceMoteur();
   return installes;
+}
+
+/** Garde les deux sélecteurs d'accord, d'où que vienne le changement. */
+function choisirMoteur(id) {
+  ecrire(CLE_MOTEUR, id);
+  if (choixMoteur) choixMoteur.value = id;
+  if (moteurCodex) moteurCodex.value = id;
+  majAstuceMoteur();
 }
 
 function moteurActuel() {
@@ -187,14 +200,14 @@ async function* revelerParPaquets(texte, sources) {
 }
 
 /** Ollama, sur la machine de la personne. Le serveur du site ne voit rien passer. */
-async function* fluxOllama(messages, modele) {
+async function* fluxOllama(messages, modele, systeme) {
   let rep;
   try {
     rep = await fetch(URL_OLLAMA + "/api/chat", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: modele, stream: true,
-        messages: [{ role: "system", content: instructionsSysteme(false) }, ...messages],
+        messages: [{ role: "system", content: systeme || instructionsSysteme(false) }, ...messages],
       }),
     });
   } catch {
@@ -231,7 +244,7 @@ async function* fluxOllama(messages, modele) {
 }
 
 /** Claude appelé directement par le navigateur, avec la clé de la personne. */
-async function* fluxClaudeDirect(messages, cle, modele) {
+async function* fluxClaudeDirect(messages, cle, modele, systeme) {
   let conversation = messages;
   const morceaux = [];
   const sources = [];
@@ -248,7 +261,7 @@ async function* fluxClaudeDirect(messages, cle, modele) {
         },
         body: JSON.stringify({
           model: modele || MODELE_CLAUDE, max_tokens: MAX_TOKENS,
-          system: instructionsSysteme(true), messages: conversation,
+          system: systeme || instructionsSysteme(true), messages: conversation,
           tools: [{ type: "web_search_20260209", name: "web_search", max_uses: RECHERCHES_MAX }],
         }),
       });
@@ -289,8 +302,10 @@ async function* fluxClaudeDirect(messages, cle, modele) {
 }
 
 /** La clé du propriétaire, côté serveur. Un code d'accès peut être demandé. */
-async function* fluxServeur(messages, modele) {
-  const envoi = JSON.stringify({ messages, modele });
+async function* fluxServeur(messages, modele, mode) {
+  // On envoie un simple mot-clé, jamais des consignes écrites ici : sans ça,
+  // n'importe qui pourrait se servir de la clé du site pour faire n'importe quoi.
+  const envoi = JSON.stringify({ messages, modele, mode });
   const appeler = () => {
     const entetes = { "content-type": "application/json" };
     const code = lire(CLE_CODE);
@@ -336,12 +351,13 @@ async function* fluxServeur(messages, modele) {
   }
 }
 
-function flux(moteur, messages) {
-  if (moteur.type === "ollama") return fluxOllama(messages, moteur.modele);
+function flux(moteur, messages, options = {}) {
+  const { systeme, mode } = options;
+  if (moteur.type === "ollama") return fluxOllama(messages, moteur.modele, systeme);
   const cle = lire(CLE_CLAUDE);
   // Ta clé si tu en as une — elle ne touche alors jamais le serveur du site.
-  return cle ? fluxClaudeDirect(messages, cle, moteur.modele)
-             : fluxServeur(messages, moteur.modele);
+  return cle ? fluxClaudeDirect(messages, cle, moteur.modele, systeme)
+             : fluxServeur(messages, moteur.modele, mode);
 }
 
 /* ---------- Le plan et son schéma ---------- */
@@ -616,7 +632,14 @@ async function envoyer() {
 }
 
 /* ---------- Paramètres, dans le menu ---------- */
+const CLE_GITHUB = "ecriture.tokenGithub";
+
 function majParametres() {
+  const token = lire(CLE_GITHUB);
+  $("#etat-github").textContent = token
+    ? `Token enregistré sur cet appareil (finit par ${token.slice(-4)})`
+    : "Aucun token sur cet appareil";
+  $("#etat-github").className = "etat " + (token ? "oui" : "non");
   const cle = lire(CLE_CLAUDE);
   $("#etat-cle").textContent = cle
     ? `Clé enregistrée sur cet appareil (finit par ${cle.slice(-4)})`
@@ -678,7 +701,6 @@ function basculerMenu() { menu.classList.contains("ouvert") ? fermerMenu() : ouv
 
 /* ---------- Les trois modes du menu ---------- */
 const pages = $("#pages");
-const panneauCodex = $("#panneau-codex");
 
 function allerPage(nom) {
   const parametres = nom === "parametres";
@@ -687,13 +709,21 @@ function allerPage(nom) {
 }
 
 function majModes() {
-  const codex = !panneauCodex.hidden;
+  const codex = corps.classList.contains("en-codex");
   $("#nav-chat").classList.toggle("actif", !codex);
   $("#nav-codex").classList.toggle("actif", codex);
 }
 
-function ouvrirCodex() { panneauCodex.hidden = false; fermerMenu(); majModes(); }
-function fermerCodex() { panneauCodex.hidden = true; majModes(); }
+function ouvrirCodex() {
+  fermerMenu();
+  corps.classList.add("en-codex");
+  majModes();
+  window.Codex?.ouvrir();
+}
+function fermerCodex() {
+  corps.classList.remove("en-codex");
+  majModes();
+}
 
 function allerChat() { fermerCodex(); fermerMenu(); saisie.focus(); }
 
@@ -791,13 +821,22 @@ addEventListener("appinstalled", () => {
 addEventListener("online", majApp);
 addEventListener("offline", majApp);
 
+/* ---------- Ce que le Codex emprunte ici ---------- */
+window.Ecriture = {
+  $, creer, lire, ecrire, flux, moteurActuel, sansReflexion, annoncer,
+  CLE_GITHUB,
+  QUEBECOIS,
+  fermerMenu: () => fermerMenu(),
+};
+
 /* ---------- Branchements ---------- */
 $("#envoyer").onclick = envoyer;
 $("#nouveau").onclick = () => nouveau();
 $("#nouveau-menu").onclick = () => nouveau();
 $("#sauvegarder").onclick = sauvegarder;
 $("#menu-bouton").onclick = basculerMenu;
-choixMoteur.onchange = () => { ecrire(CLE_MOTEUR, choixMoteur.value); majAstuceMoteur(); };
+choixMoteur.onchange = () => choisirMoteur(choixMoteur.value);
+moteurCodex.onchange = () => choisirMoteur(moteurCodex.value);
 
 $("#enregistrer-cle").onclick = () => {
   const champ = $("#cle-claude");
@@ -813,6 +852,24 @@ $("#supprimer-cle").onclick = () => {
   $("#mot-cle").textContent = "Clé supprimée de cet appareil.";
   majParametres();
 };
+$("#enregistrer-token").onclick = () => {
+  const champ = $("#token-github");
+  const valeur = champ.value.trim();
+  if (!valeur) { $("#mot-token").textContent = "Colle d'abord ton token dans la case."; return; }
+  ecrire(CLE_GITHUB, valeur);
+  champ.value = "";
+  $("#mot-token").textContent = "C'est enregistré, et ça reste ici.";
+  majParametres();
+};
+$("#supprimer-token").onclick = () => {
+  ecrire(CLE_GITHUB, "");
+  window.Codex?.oublierDepot();
+  $("#mot-token").textContent = "Token supprimé de cet appareil.";
+  majParametres();
+};
+$("#montrer-token").onchange = (e) => {
+  $("#token-github").type = e.target.checked ? "text" : "password";
+};
 $("#montrer-cle").onchange = (e) => {
   $("#cle-claude").type = e.target.checked ? "text" : "password";
 };
@@ -826,8 +883,7 @@ $("#nav-chat").onclick = allerChat;
 $("#nav-codex").onclick = ouvrirCodex;
 $("#nav-param").onclick = () => allerPage("parametres");
 $("#retour").onclick = () => allerPage("principale");
-$("#fermer-codex").onclick = fermerCodex;
-panneauCodex.onclick = (e) => { if (e.target === panneauCodex) fermerCodex(); };
+$("#codex-fermer").onclick = fermerCodex;
 
 $("#installer-app").onclick = async () => {
   if (!inviteInstall) { annoncer("Ton navigateur ne propose pas l'installation ici."); return; }
@@ -850,7 +906,7 @@ saisie.addEventListener("keydown", (e) => {
 });
 addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); sauvegarder(); }
-  if (e.key === "Escape") { if (!panneauCodex.hidden) fermerCodex(); else fermerMenu(); }
+  if (e.key === "Escape") { if (corps.classList.contains("en-codex")) fermerCodex(); else fermerMenu(); }
 });
 doc.addEventListener("click", fermerMenu);
 
