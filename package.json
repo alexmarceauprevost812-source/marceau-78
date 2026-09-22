@@ -1,0 +1,10 @@
+{
+  "name": "ecriture-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Écriture — la version web : page statique + une fonction qui parle à Claude",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0"
+  }
+}

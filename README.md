@@ -26,6 +26,9 @@ Thème gris mat, texte noir, boutons orange à coins ronds.
 | `logo_accueil.png` | le logo découpé en rond, affiché sur l'accueil |
 | `logo_marceau.png` | le logo de l'agent, en 320 px, qui glisse du centre vers la gauche |
 | `index.html` | la page de présentation publiée sur Vercel |
+| `app/` | la version web d'Écriture (`/app` sur le site) |
+| `api/chat.js` | la fonction serverless qui parle à Claude, clé côté serveur |
+| `package.json` | la seule dépendance : le SDK Anthropic, installé par Vercel |
 | `vercel.json` | fait télécharger `ecriture.py` au lieu de l'afficher |
 | `captures/` | les deux captures d'écran utilisées par la page |
 
@@ -165,6 +168,36 @@ repli.
 Les réglages sont dans `SchemaAnime` : `PAS_MS` (fluidité), `IMAGES_PAR_LIEN`
 (vitesse du courant), `PAUSE_FIN` (pause avant de reboucler), `ESPACE`
 (hauteur des flèches).
+
+## La version web
+
+`/app` sur le site reprend l'essentiel dans le navigateur : l'accueil avec le
+logo, la saisie qui glisse vers le bas, la réponse qui s'écrit au fur et à
+mesure, les schémas de plan animés, les sources cliquables, et les
+conversations gardées — cette fois dans le navigateur (`localStorage`), pas sur
+le disque.
+
+Ce qui ne suit pas : **Ollama** (il écoute sur `localhost`, un site hébergé ne
+peut pas l'atteindre) et le **Codex** (il lui faudrait une connexion GitHub
+côté serveur).
+
+### La mettre en route
+
+Il faut une variable d'environnement sur Vercel :
+
+| Variable | Rôle |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | obligatoire — la clé Claude, lue seulement par la fonction |
+| `CODE_ACCES` | facultatif — un code demandé aux visiteurs avant chaque question |
+
+**La clé ne part jamais dans le navigateur** : la page appelle `/api/chat`, et
+c'est la fonction serverless qui parle à Claude.
+
+⚠️ **Sans `CODE_ACCES`, n'importe qui ayant le lien peut poser des questions, à
+tes frais.** Mets un code, ou garde la protection Vercel active sur `/app`.
+
+La réponse arrive en flux (SSE) : le texte s'affiche pendant que Claude écrit,
+plutôt que d'un bloc à la fin. La fonction est limitée à 60 secondes.
 
 ## Personnaliser
 

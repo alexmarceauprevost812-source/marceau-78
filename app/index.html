@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Écriture</title>
+<meta name="description" content="Écriture dans le navigateur : pose une question, l'assistant répond et dessine les plans.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="/logo_64.png">
+<link rel="stylesheet" href="/app/ecriture.css">
+</head>
+<body>
+
+<button class="bouton menu-bouton" id="menu-bouton" aria-label="Conversations">☰</button>
+
+<aside class="menu" id="menu">
+  <button class="bouton" id="nouveau-menu">+ Nouvelle conversation</button>
+  <h2>Conversations</h2>
+  <div class="sessions" id="sessions"></div>
+</aside>
+
+<div class="barre">
+  <button class="bouton" id="sauvegarder">Sauvegarder</button>
+  <button class="bouton" id="nouveau">Nouveau</button>
+</div>
+
+<main class="doc" id="doc" aria-live="polite"></main>
+
+<div class="composeur" id="composeur">
+  <img class="marque" src="/logo_marceau.png" alt="" width="160" height="160">
+  <p class="invite">Pose une question…</p>
+  <div class="rangee">
+    <textarea class="boite" id="saisie" rows="2" aria-label="Ta question"
+              placeholder="Écris ici, puis Entrée…"></textarea>
+    <button class="bouton" id="envoyer">Envoyer</button>
+  </div>
+  <div class="options">
+    <span class="moteur">Claude + web</span>
+    <span class="astuce">Entrée pour envoyer · Maj+Entrée pour aller à la ligne</span>
+  </div>
+</div>
+
+<script src="/app/ecriture.js"></script>
+</body>
+</html>
