@@ -5,7 +5,7 @@
 // l'app. Comme ça, dès que tu es en ligne, tu as la dernière version — pas
 // besoin d'attendre qu'un cache expire. Le cache sert juste de filet quand la
 // connexion n'est pas là.
-const VERSION = "2.7.1";
+const VERSION = "2.9.0";
 const CACHE = `ecriture-${VERSION}`;
 
 // Ce qu'on garde d'avance pour que l'app démarre même hors ligne.
@@ -15,6 +15,7 @@ const ESSENTIELS = [
   "/app/ecriture.css",
   "/app/ecriture.js",
   "/app/codex.js",
+  "/app/fichiers.js",
   "/app/manifest.webmanifest",
   "/logo_marceau.png",
   "/logo_64.png",

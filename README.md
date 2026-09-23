@@ -65,10 +65,47 @@ bibliothèque — voir `requirements.txt` et la section
 [Les pouvoirs magiques](#les-pouvoirs-magiques--magie). Rien n'est
 obligatoire : ce qui manque est simplement expliqué au lieu de planter.
 
+## Le « + » dans la boîte où tu écris
+
+La boîte où tu écris a un **+** orange dedans, en bas à gauche. Un clic ouvre
+un petit menu :
+
+| Dans le menu | Ce que ça fait |
+| --- | --- |
+| **Ajouter des images…** | joint jusqu'à 4 images à ta question ; l'IA les regarde |
+| **Créer un fichier…** | fait un PDF, une page web ou un texte avec la conversation (voir plus bas) |
+| **Mes fichiers** | la liste des fichiers que t'as créés (ordi seulement) |
+
+Les images jointes apparaissent en petit dans la boîte, chacune avec un **×**
+pour l'enlever. Tu peux envoyer une image sans rien écrire : la question
+devient « Regarde mon image. ».
+
+Sur le **site web**, ça marche pareil, pis en plus :
+
+- tu peux **coller** une image (`Ctrl` + `V`) ou la **glisser** sur la page ;
+- sur un téléphone, « Ajouter des images… » offre aussi l'appareil photo ;
+- une photo de téléphone « couchée » est remise debout, une image
+  transparente reçoit un fond blanc, pis tout est réduit à 1568 pixels au plus
+  (ce que Claude recommande) avant de partir.
+
+**Qui voit tes images.** Claude les voit toujours. Parmi les IA gratuites,
+seulement celles qui voient les images (gemma3, llava, llama3.2-vision…) :
+Marceau le demande à Ollama. Sinon, l'IA reçoit ton texte avec une note qui
+dit qu'il y avait une image, pis Marceau te le dit sous la réponse. L'IA revoit
+les images des trois derniers messages qui en ont, pas plus.
+
+**Ce qui est gardé.** Sur le site, une conversation gardée dans le navigateur
+garde seulement une **vignette** de chaque image (quelques Ko) : la place y
+est comptée (environ 5 Mo pour tout). Si ça déborde quand même, les vieilles
+conversations perdent leurs vignettes avant qu'on en perde une seule. Par le
+serveur du site (« clé du site »), une demande est limitée à 4,5 Mo : ce sont
+les plus vieilles images qui sautent en premier.
+
 ## Faire un fichier à envoyer (Fichier ▸ Créer)
 
-Le bouton **Fichier** de la barre du haut transforme ce que t'as écrit en un
-document que tu peux remettre ou envoyer — un devoir, un rapport, une note.
+Le bouton **Fichier** de la barre du haut — ou **Créer un fichier…** dans le
+**+** de la boîte — transforme ce que t'as écrit en un document que tu peux
+remettre ou envoyer — un devoir, un rapport, une note.
 
 **Fichier ▸ Créer un fichier…** ouvre une fenêtre avec :
 
@@ -100,6 +137,14 @@ trop haute est réduite pour rentrer dans la page.
 
 Sans Pillow, le texte marche pareil ; ce sont seulement les images qui
 manquent.
+
+### Sur le site web
+
+Le **+** de la boîte offre le même **Créer un fichier…**, avec les trois mêmes
+sortes. Le fichier est fait **dans ton navigateur** (`app/fichiers.js`, le même
+moteur traduit en JavaScript : il donne le même PDF, octet pour octet) pis il
+arrive dans tes téléchargements. Rien passe par le serveur du site, pis ça
+marche sans Internet.
 
 ## Les pouvoirs magiques (✨ Magie)
 
@@ -262,6 +307,7 @@ navigateur.
 | Saut de ligne dans la saisie | `Maj` + `Entrée` |
 | Sauvegarder la conversation | `Ctrl` + `S` (ou le bouton **Sauvegarder**) |
 | Changer d'IA | le menu orange sous la boîte |
+| Joindre des images, créer un fichier | le **+** dans la boîte |
 | Repartir de zéro | bouton **Nouveau** |
 | Ouvrir le menu des conversations | bouton **☰** |
 | Brancher la clé API ou le token | **☰** puis **Paramètres** |
@@ -772,13 +818,18 @@ le disque.
 | Moteur | Qui appelle qui | Ce qui sort de ton appareil |
 | --- | --- | --- |
 | **Ollama** | ton navigateur → `localhost:11434` | rien |
-| **Claude (ta clé)** | ton navigateur → `api.anthropic.com` | ta question, vers Anthropic |
-| **Claude (clé du site)** | ton navigateur → `/api/chat` → Anthropic | ta question, via le serveur |
+| **Claude (ta clé)** | ton navigateur → `api.anthropic.com` | ta question (pis tes images), vers Anthropic |
+| **Claude (clé du site)** | ton navigateur → `/api/chat` → Anthropic | ta question (pis tes images), via le serveur |
 | **Codex** | ton navigateur → `api.github.com` | rien : ton token reste ici |
 
 Quand le Codex se sert de la clé du site, il passe par `/api/codex`, qui écrit
 ses propres consignes et n'accepte que les cinq noms d'outils connus : la clé du
 propriétaire ne devient pas un passe-partout.
+
+Les images jointes avec le **+** passent par `/api/chat` en format simple
+(`{type, data}`) : c'est le serveur qui bâtit les blocs pour Claude, jamais le
+navigateur. Il garde seulement du JPEG, PNG, WebP ou GIF en vrai base64, 4 par
+question pis 12 par demande au plus ; le reste est laissé de côté.
 
 **Ta clé Claude ne quitte jamais ton appareil.** Elle est gardée dans le
 navigateur, et c'est le navigateur qui appelle l'API directement — le serveur du

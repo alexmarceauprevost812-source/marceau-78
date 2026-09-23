@@ -211,7 +211,18 @@ function majAstuceMoteur() {
 }
 
 /* ---------- Les trois transports ----------
-   Chacun livre la même chose : {type:"texte"|"fin"|"erreur", …} */
+   Chacun livre la même chose : {type:"texte"|"fin"|"erreur", …}
+   Un message, c'est {role, content}, avec parfois des images : images: [{type, data}]
+   (data en base64). Chaque IA les veut à sa façon : */
+const pourOllama = ({ role, content, images }) =>
+  images?.length ? { role, content, images: images.map((i) => i.data) } : { role, content };
+const pourClaude = ({ role, content, images }) => !images?.length ? { role, content } : {
+  role,
+  content: [   // Claude voit mieux quand les images viennent avant le texte
+    ...images.map((i) => ({ type: "image", source: { type: "base64", media_type: i.type, data: i.data } })),
+    { type: "text", text: content },
+  ],
+};
 
 async function* revelerParPaquets(texte, sources) {
   const paquet = Math.max(1, Math.ceil(texte.length / TOURS_ECRITURE));
@@ -230,7 +241,8 @@ async function* fluxOllama(messages, modele, systeme) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: modele, stream: true,
-        messages: [{ role: "system", content: systeme || instructionsSysteme(false) }, ...messages],
+        messages: [{ role: "system", content: systeme || instructionsSysteme(false) },
+                   ...messages.map(pourOllama)],
       }),
     });
   } catch {
@@ -268,7 +280,7 @@ async function* fluxOllama(messages, modele, systeme) {
 
 /** Claude appelé directement par le navigateur, avec la clé de la personne. */
 async function* fluxClaudeDirect(messages, cle, modele, systeme) {
-  let conversation = messages;
+  let conversation = messages.map(pourClaude);
   const morceaux = [];
   const sources = [];
   for (let tour = 0; tour < 5; tour++) {
@@ -352,8 +364,9 @@ async function* fluxServeur(messages, modele, mode) {
   }
   if (!rep.ok) {
     const data = await rep.json().catch(() => ({}));
-    yield { type: "erreur",
-            message: data.erreur || `Le serveur a répondu ${rep.status}.` };
+    yield { type: "erreur", message: data.erreur || (rep.status === 413
+      ? "C'est trop gros pour le serveur du site. Enlève une image, ou mets ta clé Claude dans Paramètres."
+      : `Le serveur a répondu ${rep.status}.`) };
     return;
   }
 
@@ -490,16 +503,36 @@ function blocSources(sources) {
 function lireSessions() {
   try { return JSON.parse(localStorage.getItem(CLE_SESSIONS)) || []; } catch { return []; }
 }
+/** Une conversation sans ses vignettes d'images (quand la place manque). */
+const sansImages = (s) => ({ ...s, messages: (s.messages || []).map(
+  (m) => m.images ? { ...m, images: m.images.map(() => ({})) } : m) });
+
 function ecrireSessions(liste) {
-  try { localStorage.setItem(CLE_SESSIONS, JSON.stringify(liste.slice(0, 60))); } catch {}
+  // Le navigateur donne environ 5 Mo par site. Si ça rentre pas : les vieilles conversations
+  // perdent leurs vignettes, puis toutes, puis on garde moins de conversations.
+  let garde = liste.slice(0, 60);
+  const essais = [
+    (l) => l.map((s, i) => (i ? sansImages(s) : s)),
+    (l) => l.map(sansImages),
+    (l) => l.slice(0, Math.ceil(l.length / 2)),
+    (l) => l.slice(0, Math.ceil(l.length / 2)),
+    (l) => l.slice(0, 1),
+  ];
+  for (let i = 0; ; i++) {
+    try { localStorage.setItem(CLE_SESSIONS, JSON.stringify(garde)); return true; }
+    catch { if (i >= essais.length) return false; garde = essais[i](garde); }
+  }
 }
 function sauverSession() {
   if (!messages.length) return;
   const liste = lireSessions().filter((s) => s.id !== sessionId);
   if (!sessionId) sessionId = String(Date.now());
   const premiere = messages.find((m) => m.role === "user")?.content || "Conversation";
+  // Les images en grand restent en mémoire le temps de la conversation : on garde les vignettes
+  const garde = messages.map((m) => !m.images ? m
+    : { ...m, images: m.images.map(({ mini, ml, mh }) => ({ mini, ml, mh })) });
   liste.unshift({ id: sessionId, titre: premiere.replace(/\s+/g, " ").slice(0, 42),
-                  modifie: Date.now(), messages });
+                  modifie: Date.now(), messages: garde });
   ecrireSessions(liste);
   dessinerSessions();
 }
@@ -532,8 +565,10 @@ function ouvrirSession(id) {
   sessionId = s.id;
   messages = s.messages || [];
   for (const m of messages) {
-    if (m.role === "user") doc.append(creer("p", "question", m.content));
-    else {
+    if (m.role === "user") {
+      doc.append(creer("p", "question", m.content));
+      if (m.images?.some((i) => i.mini)) doc.append(vignettes(m.images));
+    } else {
       doc.append(creer("p", "reponse", m.content));
       if (m.app) doc.append(carteApp(m.app));
       if (m.etapes?.length) doc.append(schema(m.etapes));
@@ -793,10 +828,181 @@ function clicVoix() {
   majBoutonsVoix();
 }
 
+/* ---------- Le « + » dans la boîte : des images, un fichier à créer ---------- */
+const PIECES_MAX = 4;                 // images par question, comme la version bureau
+const COTE_IA = 1568;                 // pas plus grand : c'est ce que Claude recommande
+const COTE_MINI = 320;                // la vignette qu'on garde avec la conversation
+const OCTETS_SERVEUR = 4_000_000;     // le serveur du site (Vercel) refuse plus que 4,5 Mo
+const OCTETS_DIRECT = 20_000_000;
+const MESSAGES_AVEC_IMAGES = 3;       // l'IA revoit les images des 3 derniers messages qui en ont
+const boutonPlus = $("#plus");
+const menuPlus = $("#menu-plus");
+const choixImages = $("#choix-images");
+let pieces = [];                      // les images jointes, pas encore envoyées
+let selectionGardee = "";             // ce que t'avais surligné dans la conversation
+
+async function chargerImage(fichier) {
+  const url = URL.createObjectURL(fichier);
+  const img = new Image();
+  img.src = url;
+  try { await img.decode(); } finally { URL.revokeObjectURL(url); }
+  return img;
+}
+
+/** Une copie JPEG pas plus grande que « cote ». Fond blanc : une image transparente
+    deviendrait noire en JPEG. Rend {url (data:…), data (base64), l, h}. */
+function reduire(img, cote, qualite) {
+  const L = img.naturalWidth || 800, H = img.naturalHeight || 600;
+  const echelle = Math.min(1, cote / Math.max(L, H));
+  const l = Math.max(1, Math.round(L * echelle)), h = Math.max(1, Math.round(H * echelle));
+  const toile = document.createElement("canvas");
+  toile.width = l; toile.height = h;
+  const ctx = toile.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, l, h);
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, 0, 0, l, h);
+  const url = toile.toDataURL("image/jpeg", qualite);
+  return { url, data: url.slice(url.indexOf(",") + 1), l, h };
+}
+
+async function ajouterImages(fichiers) {
+  const liste = [...fichiers].filter((f) => f.type.startsWith("image/"));
+  if (!liste.length) { annoncer("Ça, c'est pas une image."); return; }
+  let manquees = 0, tropDImages = false;
+  for (const f of liste) {
+    if (pieces.length >= PIECES_MAX) { tropDImages = true; break; }
+    try {
+      const img = await chargerImage(f);
+      const ia = reduire(img, COTE_IA, 0.86);
+      const mini = reduire(img, COTE_MINI, 0.72);
+      pieces.push({ nom: f.name || "image", type: "image/jpeg", data: ia.data, l: ia.l, h: ia.h,
+                    mini: mini.url, ml: mini.l, mh: mini.h });
+    } catch {
+      manquees += 1;
+    }
+  }
+  // Deux ajouts en même temps (coller pendant qu'un choix s'ouvre) : on reste à 4
+  if (pieces.length > PIECES_MAX) { pieces.length = PIECES_MAX; tropDImages = true; }
+  dessinerPieces();
+  if (tropDImages) annoncer(`${PIECES_MAX} images au plus par question.`);
+  else if (manquees) annoncer(manquees > 1 ? `${manquees} images ont pas voulu s'ouvrir.`
+                                           : "Cette image-là a pas voulu s'ouvrir.");
+  saisie.focus();
+}
+
+/** Les petites images dans la boîte, avec un × pour en enlever une. */
+function dessinerPieces() {
+  const zone = $("#pieces");
+  zone.replaceChildren(...pieces.map((p, i) => {
+    const puce = creer("div", "piece");
+    puce.title = p.nom;
+    const img = creer("img");
+    img.src = p.mini;
+    img.alt = p.nom;
+    const x = creer("button", null, "×");
+    x.type = "button";
+    x.setAttribute("aria-label", `Enlever ${p.nom}`);
+    x.onclick = () => { pieces.splice(i, 1); dessinerPieces(); saisie.focus(); };
+    puce.append(img, x);
+    return puce;
+  }));
+  zone.hidden = !pieces.length;
+  mesurer();        // la boîte a grandi (ou rapetissé) : le reste de l'écran suit
+}
+
+/** Les images d'une question, dans la conversation. */
+function vignettes(images) {
+  const bloc = creer("div", "vignettes");
+  for (const im of images) {
+    if (!im.mini) continue;
+    const img = creer("img");
+    img.src = im.mini;
+    img.alt = "Image jointe";
+    bloc.append(img);
+  }
+  return bloc;
+}
+
+/** Ce qui est surligné dans la conversation, s'il y a de quoi. */
+function selectionDansDoc() {
+  const sel = getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return "";
+  return doc.contains(sel.getRangeAt(0).commonAncestorContainer) ? sel.toString().trim() : "";
+}
+
+function ouvrirMenuPlus() {
+  menuPlus.hidden = false;
+  boutonPlus.setAttribute("aria-expanded", "true");
+}
+function fermerMenuPlus() {
+  menuPlus.hidden = true;
+  boutonPlus.setAttribute("aria-expanded", "false");
+  selectionGardee = "";
+}
+
+/* Est-ce que ce modèle Ollama voit les images (llava, llama3.2-vision, gemma3…)? On demande à Ollama. */
+const visionOllama = new Map();
+async function ollamaVoitImages(modele) {
+  if (visionOllama.has(modele)) return visionOllama.get(modele);
+  try {
+    const rep = await fetch(URL_OLLAMA + "/api/show", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: modele }),
+    });
+    if (!rep.ok) return true;                     // on le sait pas : on essaie quand même
+    const data = await rep.json();
+    const voit = Array.isArray(data.capabilities) ? data.capabilities.includes("vision")
+      : "projector_info" in data                   // un vieil Ollama : on regarde la famille
+        || /clip|mllama/.test((data.details?.families || []).join(" ").toLowerCase());
+    visionOllama.set(modele, voit);
+    return voit;
+  } catch {
+    return true;
+  }
+}
+
+/** Ce qu'on envoie à l'IA. Elle revoit le code de sa DERNIÈRE app pour pouvoir la modifier
+    (les plus vieilles sont juste nommées), pis les images des derniers messages qui en ont. */
+function preparerEnvoi(liste, moteur, voit) {
+  const derniereApp = liste.map((m) => !!m.app).lastIndexOf(true);
+  const envoyes = liste.map((m, i) => ({ role: m.role, content: !m.app ? m.content
+    : i === derniereApp ? `${m.content}\n[APP ${m.app.titre}]\n${m.app.html}[/APP]`
+    : `${m.content}\n(L'app « ${m.app.titre} » était ici.)` }));
+  const avecImages = liste.map((m, i) => (m.images?.length ? i : -1)).filter((i) => i >= 0);
+  if (!avecImages.length) return envoyes;
+
+  const parServeur = moteur.type === "claude" && !lire(CLE_CLAUDE);
+  let reste = parServeur
+    ? OCTETS_SERVEUR - new TextEncoder().encode(JSON.stringify(envoyes)).length
+    : OCTETS_DIRECT;
+  const recents = new Set(avecImages.slice(-MESSAGES_AVEC_IMAGES));
+  // Des plus récentes aux plus vieilles : si la place manque, ce sont les vieilles qui sautent
+  for (const i of [...avecImages].reverse()) {
+    const images = [];
+    if (voit && recents.has(i)) {
+      for (const im of liste[i].images) {
+        // Une conversation rouverte a juste gardé ses vignettes : l'IA les voit en petit
+        const data = im.data || (im.mini ? im.mini.slice(im.mini.indexOf(",") + 1) : "");
+        if (!data || data.length > reste) continue;
+        reste -= data.length;
+        images.push({ type: "image/jpeg", data });
+      }
+    }
+    if (images.length) envoyes[i].images = images;
+    else {
+      envoyes[i].content += "\n" + (voit ? "(Une image avait été jointe ici.)"
+        : "(La personne a joint une image que tu ne peux pas voir.)");
+    }
+  }
+  return envoyes;
+}
+
 async function envoyer() {
   if (occupe) return;
-  const question = saisie.value.trim();
-  if (!question) return;
+  const tapee = saisie.value.trim();
+  if (!tapee && !pieces.length) return;
+  const question = tapee || "Regarde mon image.";
   taire();                   // on arrête de lire l'ancienne réponse
   deverrouillerVoix();
   const moteur = moteurActuel();
@@ -804,8 +1010,17 @@ async function envoyer() {
 
   const mien = ++generation;
   saisie.value = "";
+  fermerMenuPlus();
+  const jointes = pieces;
+  pieces = [];
+  dessinerPieces();
   doc.append(creer("p", "question", question));
-  messages.push({ role: "user", content: question });
+  const message = { role: "user", content: question };
+  if (jointes.length) {
+    message.images = jointes.map(({ type, data, l, h, mini, ml, mh }) => ({ type, data, l, h, mini, ml, mh }));
+    doc.append(vignettes(message.images));
+  }
+  messages.push(message);
   if (!corps.classList.contains("demarre")) demarrer();
 
   const nom = moteur.type === "ollama" ? moteur.modele.replace(/:latest$/, "") : "Marceau";
@@ -818,11 +1033,16 @@ async function envoyer() {
   }, 400);
   occupe = true;
 
-  // L'IA revoit le code de sa DERNIÈRE app pour pouvoir la modifier; les plus vieilles sont juste nommées
-  const derniereApp = messages.map((m) => !!m.app).lastIndexOf(true);
-  const envoyes = messages.map((m, i) => ({ role: m.role, content: !m.app ? m.content
-    : i === derniereApp ? `${m.content}\n[APP ${m.app.titre}]\n${m.app.html}[/APP]`
-    : `${m.content}\n(L'app « ${m.app.titre} » était ici.)` }));
+  // Une IA gratuite qui voit pas les images : on le dit, pis elle a au moins le texte
+  let voit = true, avis = "";
+  if (moteur.type === "ollama" && messages.some((m) => m.images?.length)) {
+    voit = await ollamaVoitImages(moteur.modele);
+    if (mien !== generation) { clearInterval(minuterie); attente.remove(); return; }
+    if (!voit && jointes.length) {
+      avis = `${nom} voit pas les images. Pour qu'il les voie : ollama pull gemma3, ou choisis Claude.`;
+    }
+  }
+  const envoyes = preparerEnvoi(messages, moteur, voit);
   let para = null, curseur = null, brut = "", sources = [], erreur = null;
   let studio = null;          // la carte de l'app, si l'IA en construit une
 
@@ -867,6 +1087,12 @@ async function envoyer() {
   if (erreur) {
     messages.pop();
     (para || doc.appendChild(creer("p", "reponse"))).textContent = erreur;
+    // Tes images reviennent dans la boîte : pas besoin d'aller les rechoisir pour réessayer
+    if (jointes.length && !pieces.length) {
+      pieces = jointes;
+      dessinerPieces();
+      if (!saisie.value.trim()) saisie.value = tapee;
+    }
     occupe = false;
     doc.scrollTop = doc.scrollHeight;
     return;
@@ -884,6 +1110,7 @@ async function envoyer() {
   } else studio?.remove();
   if (etapes.length) doc.append(schema(etapes));
   if (sources.length) doc.append(blocSources(sources));
+  if (avis) doc.append(creer("p", "avis", avis));
   messages.push({ role: "assistant", content: para.textContent, etapes, sources,
                   ...(app ? { app } : {}) });
   parler(para.textContent);   // la réponse, lue à voix haute
@@ -938,23 +1165,134 @@ function nouveau(refermer = true) {
   doc.replaceChildren();
   corps.classList.remove("demarre");
   saisie.value = "";
+  pieces = [];
+  dessinerPieces();
+  fermerMenuPlus();
   dessinerSessions();
   if (refermer) fermerMenu();
   saisie.focus();
 }
 
-function sauvegarder() {
-  if (!messages.length) { alert("Écris au moins une question avant de sauvegarder."); return; }
-  const contenu = messages.map((m) => m.role === "user" ? m.content :
+/** Toute la conversation en texte : les questions, les réponses, les plans pis les sources. */
+function texteConversation() {
+  return messages.map((m) => m.role === "user" ? m.content :
     m.content
     + (m.etapes?.length ? "\n" + m.etapes.map((e, i) => `${i + 1}. ${e}`).join("\n") : "")
     + (m.sources?.length ? "\nSources :\n" + m.sources.map((s) => `- ${s.titre} ${s.url}`).join("\n") : "")
   ).join("\n\n");
+}
+
+function sauvegarder() {
+  if (!messages.length) { alert("Écris au moins une question avant de sauvegarder."); return; }
   const lien = creer("a");
-  lien.href = URL.createObjectURL(new Blob([contenu], { type: "text/plain;charset=utf-8" }));
+  lien.href = URL.createObjectURL(new Blob([texteConversation()], { type: "text/plain;charset=utf-8" }));
   lien.download = "ecriture.txt";
   lien.click();
   URL.revokeObjectURL(lien.href);
+}
+
+/* ---------- « Créer un fichier » : ce que t'as écrit devient un document à envoyer ----------
+   Le PDF, la page web pis le texte sont faits ici même, dans le navigateur (fichiers.js) :
+   rien passe par un serveur, pis ça marche sans Internet. */
+const fenetreFichier = $("#fenetre-fichier");
+let imagesFichier = [];
+
+const tailleLisible = (octets) => octets < 1024 ? `${octets} o`
+  : octets < 1024 * 1024 ? `${Math.round(octets / 1024)} Ko`
+  : `${(octets / 1024 / 1024).toFixed(1).replace(".", ",")} Mo`;
+
+function base64VersOctets(b64) {
+  const binaire = atob(b64);
+  const octets = new Uint8Array(binaire.length);
+  for (let i = 0; i < binaire.length; i++) octets[i] = binaire.charCodeAt(i);
+  return octets;
+}
+
+/** Les images de la conversation, dans l'ordre (en grand si on les a encore, sinon la vignette). */
+function imagesDeLaConversation() {
+  const images = [];
+  for (const m of messages) {
+    for (const im of m.images || []) {
+      if (im.data) images.push({ data: im.data, l: im.l, h: im.h, mini: im.mini });
+      else if (im.mini) images.push({ data: im.mini.slice(im.mini.indexOf(",") + 1), l: im.ml, h: im.mh, mini: im.mini });
+    }
+  }
+  return images;
+}
+
+function ouvrirFenetreFichier(selection = "") {
+  fermerMenu();
+  const premiere = messages.find((m) => m.role === "user" && m.content.trim());
+  $("#fichier-titre").value = premiere ? premiere.content.replace(/\s+/g, " ").trim().slice(0, 60)
+                                       : "Mon document";
+  // Ce que t'avais surligné dans la conversation, sinon toute la conversation
+  $("#fichier-contenu").value = selection || texteConversation();
+  imagesFichier = imagesDeLaConversation().slice(0, 8);
+  $("#fichier-images-titre").textContent = `Les images de la conversation (${imagesFichier.length})`;
+  $("#fichier-images").replaceChildren(...imagesFichier.map((im, i) => {
+    const boite = creer("div", "fichier-image");
+    const carre = creer("div", "carre");
+    const img = creer("img");
+    img.src = im.mini;
+    img.alt = `Image ${i + 1}`;
+    carre.append(img);
+    const coche = creer("label", "coche");
+    const case_ = creer("input");
+    case_.type = "checkbox";
+    case_.checked = true;
+    case_.dataset.indice = String(i);
+    coche.append(case_, document.createTextNode(` Image ${i + 1}`));
+    boite.append(carre, coche);
+    return boite;
+  }));
+  $("#fichier-images-zone").hidden = !imagesFichier.length;
+  $("#fichier-mot").textContent = "";
+  fenetreFichier.hidden = false;
+  $("#fichier-titre").focus();
+}
+
+function fermerFenetreFichier() {
+  fenetreFichier.hidden = true;
+  imagesFichier = [];
+  saisie.focus();
+}
+
+/** Ce qui va dans le fichier : ton texte, pis les images que t'as cochées. */
+function blocsFichier() {
+  const texte = $("#fichier-contenu").value.trim();
+  const blocs = texte ? [{ sorte: "texte", valeur: texte }] : [];
+  for (const c of fenetreFichier.querySelectorAll(".fichier-image input:checked")) {
+    const im = imagesFichier[Number(c.dataset.indice)];
+    if (!im) continue;
+    blocs.push({ sorte: "image", jpeg: base64VersOctets(im.data), largeur: im.l, hauteur: im.h,
+                 dataUrl: "data:image/jpeg;base64," + im.data });
+  }
+  return blocs;
+}
+
+function creerLeFichier() {
+  const mot = $("#fichier-mot");
+  const blocs = blocsFichier();
+  if (!blocs.length) { mot.textContent = "Écris quelque chose, ou coche une image."; return; }
+  const F = window.MarceauFichiers;
+  if (!F) { mot.textContent = "Le moteur de fichiers a pas chargé. Recharge la page."; return; }
+  const titre = $("#fichier-titre").value.trim();
+  const format = fenetreFichier.querySelector('input[name="fichier-format"]:checked')?.value || "pdf";
+  const [contenu, type, extension] =
+      format === "html" ? [F.html(titre, blocs), "text/html;charset=utf-8", ".html"]
+    : format === "txt" ? [F.texte(titre, blocs), "text/plain;charset=utf-8", ".txt"]
+    : [F.pdf(titre, blocs), "application/pdf", ".pdf"];
+  const nom = (titre.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-").slice(0, 60).trim() || "document") + extension;
+  const fichier = new Blob([contenu], { type });
+  const lien = creer("a");
+  lien.href = URL.createObjectURL(fichier);
+  lien.download = nom;
+  document.body.append(lien);
+  lien.click();
+  lien.remove();
+  setTimeout(() => URL.revokeObjectURL(lien.href), 10000);
+  fermerFenetreFichier();
+  annoncer(`Fichier créé : ${nom} (${tailleLisible(fichier.size)}). Il est dans tes téléchargements.`, 6000);
 }
 
 function ouvrirMenu() { menu.classList.add("ouvert"); dessinerSessions(); majParametres(); majOllama(); }
@@ -1011,7 +1349,7 @@ function dessinerModelesGratuits(installes = []) {
 }
 
 /* ---------- L'app : s'installer, pis se tenir à jour ---------- */
-const VERSION_APP = "2.7.1";
+const VERSION_APP = "2.9.0";
 let inviteInstall = null;      // le navigateur nous prête son « Installer »
 let rechargeFaite = false;
 
@@ -1173,8 +1511,60 @@ saisie.addEventListener("keydown", (e) => {
 });
 addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); sauvegarder(); }
-  if (e.key === "Escape") { if (corps.classList.contains("en-codex")) fermerCodex(); else fermerMenu(); }
+  if (e.key === "Escape") {
+    if (!fenetreFichier.hidden) fermerFenetreFichier();
+    else if (!menuPlus.hidden) { fermerMenuPlus(); boutonPlus.focus(); }
+    else if (corps.classList.contains("en-codex")) fermerCodex();
+    else fermerMenu();
+  }
 });
+
+/* Le « + » : son menu, le choix d'images, coller une image, en glisser une */
+boutonPlus.addEventListener("pointerdown", () => { selectionGardee = selectionDansDoc(); });
+boutonPlus.onclick = (e) => {
+  e.stopPropagation();
+  if (!menuPlus.hidden) { fermerMenuPlus(); return; }
+  const selection = selectionGardee || selectionDansDoc();   // au clavier, y'a pas de pointerdown
+  ouvrirMenuPlus();
+  selectionGardee = selection;
+};
+$("#plus-images").onclick = () => { fermerMenuPlus(); choixImages.click(); };
+$("#plus-fichier").onclick = () => {
+  const selection = selectionGardee;
+  fermerMenuPlus();
+  ouvrirFenetreFichier(selection);
+};
+choixImages.onchange = () => {
+  const fichiers = [...choixImages.files];
+  choixImages.value = "";                    // la même image pourra être rechoisie
+  if (fichiers.length) ajouterImages(fichiers);
+};
+document.addEventListener("click", (e) => {
+  if (!menuPlus.hidden && !menuPlus.contains(e.target) && !boutonPlus.contains(e.target)) fermerMenuPlus();
+});
+saisie.addEventListener("paste", (e) => {
+  const images = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+  if (!images.length || e.clipboardData.getData("text/plain").trim()) return;   // du texte : collé comme d'habitude
+  e.preventDefault();
+  ajouterImages(images);
+});
+// Une image glissée sur la page va dans la boîte (au lieu d'ouvrir l'image pis de quitter l'app)
+const glisseDesFichiers = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+addEventListener("dragover", (e) => {
+  if (!glisseDesFichiers(e)) return;
+  e.preventDefault();
+  if (!corps.classList.contains("en-codex")) $("#boite-plus").classList.add("depot");
+});
+addEventListener("dragleave", (e) => { if (!e.relatedTarget) $("#boite-plus").classList.remove("depot"); });
+addEventListener("drop", (e) => {
+  if (!glisseDesFichiers(e)) return;
+  e.preventDefault();
+  $("#boite-plus").classList.remove("depot");
+  if (!corps.classList.contains("en-codex") && e.dataTransfer.files.length) ajouterImages(e.dataTransfer.files);
+});
+$("#fichier-creer").onclick = creerLeFichier;
+$("#fichier-annuler").onclick = fermerFenetreFichier;
+$("#fichier-fermer").onclick = fermerFenetreFichier;
 doc.addEventListener("click", fermerMenu);
 
 /* ---------- Démarrage ---------- */

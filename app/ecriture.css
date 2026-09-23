@@ -270,6 +270,76 @@ button { font: inherit; color: inherit; }
 }
 .boite:focus { outline: 0; border-color: var(--orange); }
 .rangee .bouton { padding-left: 22px; padding-right: 22px; border-radius: var(--r-zone); }
+
+/* La boîte du chat a son « + » dedans : c'est elle qui porte le contour, autour des deux */
+.boite-plus {
+  position: relative; flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+  background: var(--gris-zone);
+  border: 2px solid var(--gris-bord);
+  border-radius: var(--r-zone);
+  transition: border-color .15s ease;
+}
+.boite-plus:focus-within, .boite-plus.depot { border-color: var(--orange); }
+.boite-ligne { flex: 1; display: flex; align-items: flex-end; }
+.boite-plus .boite { border: 0; background: transparent; padding-left: 10px; min-width: 0; }
+.plus {
+  flex: 0 0 auto; width: 34px; height: 34px; margin: 0 0 10px 10px; padding: 0;
+  border: 0; border-radius: 50%; cursor: pointer;
+  background: var(--orange); color: #000;
+  font-size: 1.4rem; font-weight: 700; line-height: 1;
+  transition: background .12s ease, transform .15s ease;
+  -webkit-tap-highlight-color: transparent;   /* pas de carré bleu quand on le touche */
+}
+.plus:hover { background: #ff8c3a; }
+.plus[aria-expanded="true"] { background: var(--orange-fonce); transform: rotate(45deg); }
+.plus:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+/* Le petit menu du « + » : il ouvre vers le haut, la boîte est en bas de l'écran */
+.menu-plus {
+  position: absolute; left: 4px; bottom: calc(100% + 8px); z-index: 12;
+  display: flex; flex-direction: column; min-width: 230px;
+  background: var(--gris-menu);
+  border: 2px solid #5e5e5e; border-radius: 12px;
+  padding: 6px; box-shadow: 0 6px 18px #0004;
+}
+.menu-plus button {
+  border: 0; background: none; cursor: pointer; text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  padding: 10px 12px; border-radius: 8px; font-size: .92rem; font-weight: 700;
+}
+.menu-plus button:hover, .menu-plus button:focus-visible {
+  background: var(--orange); color: #000; outline: 0;
+}
+
+/* Les images jointes, pas encore envoyées : dans la boîte, au-dessus de ce que t'écris */
+.pieces { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 10px 0; }
+.piece {
+  position: relative; width: 64px; height: 64px; flex: 0 0 auto;
+  border-radius: 10px; overflow: hidden;
+  background: var(--gris-boite); border: 1px solid var(--gris-bord);
+}
+.piece img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.piece button {
+  position: absolute; top: 3px; right: 3px;
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
+  background: #000000b3; color: #fff; cursor: pointer;
+  font-size: .95rem; line-height: 22px; text-align: center;
+}
+.piece button:hover { background: #000; }
+/* Le choix de fichiers du navigateur : invisible, mais pas « display: none » (iPhone) */
+.cache-fichier {
+  position: absolute; width: 1px; height: 1px; opacity: 0;
+  overflow: hidden; pointer-events: none;
+}
+
+/* Les images d'une question, dans la conversation */
+.vignettes { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+.vignettes img {
+  display: block; height: 130px; max-width: 100%; object-fit: cover;
+  border-radius: 10px; border: 2px solid var(--gris-bord);
+}
+.avis { font-size: .82rem; font-style: italic; opacity: .85; margin: 4px 0 8px 46px; }
 .options { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .moteur {
   background: var(--orange); border-radius: 9px;
@@ -293,6 +363,42 @@ button { font: inherit; color: inherit; }
     border-radius: var(--r-bouton);
   }
   .boite { min-height: 104px; }
+  .plus { width: 32px; height: 32px; margin: 0 0 10px 8px; }
+  .piece { width: 56px; height: 56px; }
+  .vignettes img { height: 104px; }
+  .avis { margin-left: 0; }
+}
+
+/* ---------- Les fenêtres par-dessus tout (créer un fichier…) ---------- */
+.fenetre {
+  position: fixed; inset: 0; z-index: 40;
+  background: #00000066;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.fenetre .dedans {
+  position: relative; background: var(--gris-menu);
+  border: 2px solid #5e5e5e; border-radius: var(--r-zone);
+  padding: 22px; width: 100%; max-width: 620px; max-height: 92vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.fenetre h3 { margin: 0 0 6px; font-size: 1.1rem; }
+.fenetre input[type="checkbox"], .fenetre input[type="radio"] { accent-color: var(--orange); }
+.etiquette { display: block; margin: 8px 0 2px; font-size: .86rem; font-weight: 700; }
+.fichier-contenu { resize: vertical; min-height: 150px; line-height: 1.45; }
+.fichier-images { display: flex; flex-wrap: wrap; gap: 10px; }
+.fichier-image { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.fichier-image .carre {
+  width: 76px; height: 76px; display: grid; place-items: center;
+  border-radius: 10px; overflow: hidden; background: var(--gris-boite);
+}
+.fichier-image img { max-width: 76px; max-height: 76px; display: block; }
+.fichier-image .coche { margin: 0; font-size: .76rem; }
+.fichier-formats .coche { margin: 3px 0; font-size: .88rem; cursor: pointer; }
+.fenetre .rang-boutons { margin-top: 12px; align-items: center; }
+.fenetre .fin:empty { display: none; }
+@media (max-width: 720px) {
+  .fenetre { padding: 10px; }
+  .fenetre .dedans { padding: 18px 14px; max-height: 94vh; }
 }
 
 /* ---------- Réglages (page 2 du menu) ---------- */
@@ -545,7 +651,7 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 }
 /* Sur l'orange, le texte reste noir, de jour comme de nuit */
 .bouton, .mode.actif, .session.active, .moteur, .modeles li.installe,
-.codex-onglet.actif, .codex-fichier.actif, .annonce { color: #000; }
+.codex-onglet.actif, .codex-fichier.actif, .annonce, .plus { color: #000; }
 [data-theme="nuit"] .bouton.voix.coupee { color: var(--noir); }
 [data-theme="nuit"] .mode { background: #1a1a1a; }
 [data-theme="nuit"] .mode:hover { background: #262626; }
@@ -568,7 +674,10 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 [data-theme="nuit"] .codex-geste.mal { color: #ff8a80; }
 [data-theme="nuit"] .menu,
 [data-theme="nuit"] .codex-barre,
-[data-theme="nuit"] .codex-choix .dedans { border-color: #333; }
+[data-theme="nuit"] .codex-choix .dedans,
+[data-theme="nuit"] .fenetre .dedans,
+[data-theme="nuit"] .menu-plus { border-color: #333; }
+[data-theme="nuit"] .boite-plus:focus-within { border-color: var(--orange); }
 [data-theme="nuit"] .trait { border-top-color: #333; }
 [data-theme="nuit"] .session button:hover,
 [data-theme="nuit"] .codex-onglet .x:hover,

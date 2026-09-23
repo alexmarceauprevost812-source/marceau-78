@@ -189,10 +189,25 @@ try {
   <img class="marque" src="/logo_marceau.png" alt="" width="160" height="160">
   <p class="invite">Pose une question…</p>
   <div class="rangee">
-    <textarea class="boite" id="saisie" rows="2" aria-label="Ta question"
-              placeholder="Écris ici, puis Entrée…"></textarea>
+    <!-- La boîte où tu écris, avec son « + » dedans : des images, un fichier à créer -->
+    <div class="boite-plus" id="boite-plus">
+      <div class="pieces" id="pieces" hidden></div>
+      <div class="boite-ligne">
+        <button class="plus" id="plus" type="button" aria-haspopup="menu" aria-expanded="false"
+                aria-label="Ajouter des images ou créer un fichier"
+                title="Ajouter des images, créer un fichier">+</button>
+        <textarea class="boite" id="saisie" rows="2" aria-label="Ta question"
+                  placeholder="Écris ici, puis Entrée…"></textarea>
+      </div>
+      <div class="menu-plus" id="menu-plus" role="menu" hidden>
+        <button type="button" role="menuitem" id="plus-images">Ajouter des images…</button>
+        <button type="button" role="menuitem" id="plus-fichier">Créer un fichier…</button>
+      </div>
+    </div>
     <button class="bouton" id="envoyer">Envoyer</button>
   </div>
+  <input class="cache-fichier" id="choix-images" type="file" accept="image/*" multiple
+         tabindex="-1" aria-hidden="true">
   <div class="options">
     <select class="moteur" id="moteur" aria-label="Quelle IA répond"></select>
     <button class="bouton petit voix" id="voix" type="button">🔊 Voix</button>
@@ -200,8 +215,39 @@ try {
   </div>
 </div>
 
+<!-- ---------- « Créer un fichier » : ce que t'as écrit devient un document à envoyer ---------- -->
+<div class="fenetre" id="fenetre-fichier" hidden>
+  <div class="dedans" role="dialog" aria-modal="true" aria-labelledby="fichier-h">
+    <button class="fermer" id="fichier-fermer" type="button" aria-label="Fermer">×</button>
+    <h3 id="fichier-h">Créer un fichier</h3>
+    <label class="etiquette" for="fichier-titre">Titre du document</label>
+    <input class="champ" id="fichier-titre" type="text" autocomplete="off">
+    <label class="etiquette" for="fichier-contenu">Ce qu'il y a dedans</label>
+    <textarea class="champ fichier-contenu" id="fichier-contenu" rows="8"></textarea>
+    <div id="fichier-images-zone" hidden>
+      <p class="etiquette" id="fichier-images-titre">Les images de la conversation</p>
+      <div class="fichier-images" id="fichier-images"></div>
+    </div>
+    <p class="etiquette">Sorte de fichier</p>
+    <div class="fichier-formats">
+      <label class="coche"><input type="radio" name="fichier-format" value="pdf" checked>
+        PDF — à imprimer ou à remettre</label>
+      <label class="coche"><input type="radio" name="fichier-format" value="html">
+        Page web — un seul fichier, images dedans</label>
+      <label class="coche"><input type="radio" name="fichier-format" value="txt">
+        Texte brut — sans les images</label>
+    </div>
+    <div class="rang-boutons">
+      <button class="bouton" id="fichier-creer" type="button">Créer le fichier</button>
+      <button class="bouton petit" id="fichier-annuler" type="button">Annuler</button>
+    </div>
+    <p class="fin" id="fichier-mot" aria-live="polite"></p>
+  </div>
+</div>
+
 <div class="annonce" id="annonce" hidden></div>
 
+<script src="/app/fichiers.js"></script>
 <script src="/app/ecriture.js"></script>
 <script src="/app/codex.js"></script>
 </body>

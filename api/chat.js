@@ -19,6 +19,11 @@ const RECHERCHES_MAX = 4;      // recherches web par question
 const TOURS_MAX = 5;           // relances quand l'API met la réponse sur pause
 const MESSAGES_MAX = 40;       // on ne renvoie pas une conversation sans fin
 const CARACTERES_MAX = 60000;  // ni un pavé
+const IMAGES_PAR_MESSAGE = 4;  // comme le « + » de la boîte
+const IMAGES_MAX = 12;         // pour toute la demande
+const OCTETS_IMAGES_MAX = 4_300_000;   // en base64 (Vercel refuse de toute façon plus que 4,5 Mo)
+const TYPES_IMAGES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 const QUEBECOIS =
   "Tu es un vrai Québécois. Tu parles pis tu écris en français québécois familier, " +
@@ -54,15 +59,43 @@ function instructionsSysteme() {
   );
 }
 
+/** Les images d'une question : c'est le serveur qui bâtit les blocs pour Claude, jamais le
+    navigateur. On garde seulement des images d'une sorte connue, en vrai base64, pis pas trop. */
+function nettoyerImages(brut, reste) {
+  if (!Array.isArray(brut)) return [];
+  const blocs = [];
+  for (const im of brut.slice(0, IMAGES_PAR_MESSAGE)) {
+    if (reste.nombre <= 0) break;
+    if (!im || !TYPES_IMAGES.has(im.type) || typeof im.data !== "string") continue;
+    if (im.data.length > reste.octets || !BASE64.test(im.data)) continue;
+    reste.nombre -= 1;
+    reste.octets -= im.data.length;
+    blocs.push({ type: "image", source: { type: "base64", media_type: im.type, data: im.data } });
+  }
+  return blocs;
+}
+
 /** Garde seulement ce qui est valide : rôles connus, texte non vide, taille bornée. */
 function nettoyerMessages(brut) {
   if (!Array.isArray(brut)) return [];
   const messages = [];
-  for (const m of brut.slice(-MESSAGES_MAX)) {
-    if (!m || (m.role !== "user" && m.role !== "assistant")) continue;
-    const contenu = typeof m.content === "string" ? m.content.trim() : "";
-    if (contenu) messages.push({ role: m.role, content: contenu.slice(0, CARACTERES_MAX) });
+  const garde = brut.slice(-MESSAGES_MAX);
+  const reste = { nombre: IMAGES_MAX, octets: OCTETS_IMAGES_MAX };
+  // Des plus récents aux plus vieux : si ça déborde, ce sont les vieilles images qui sautent
+  const images = new Map();
+  for (let i = garde.length - 1; i >= 0; i--) {
+    if (garde[i]?.role === "user") images.set(i, nettoyerImages(garde[i].images, reste));
   }
+  garde.forEach((m, i) => {
+    if (!m || (m.role !== "user" && m.role !== "assistant")) return;
+    const contenu = typeof m.content === "string" ? m.content.trim().slice(0, CARACTERES_MAX) : "";
+    const blocs = images.get(i) || [];
+    if (blocs.length) {
+      messages.push({ role: "user", content: [...blocs, { type: "text", text: contenu || "Regarde mon image." }] });
+    } else if (contenu) {
+      messages.push({ role: m.role, content: contenu });
+    }
+  });
   while (messages.length && messages[0].role !== "user") messages.shift();
   return messages;
 }

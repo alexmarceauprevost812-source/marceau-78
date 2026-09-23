@@ -257,7 +257,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 HEURES_MAJ = 6         # on revérifie les mises à jour aux 6 heures, même si l'app reste ouverte
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
@@ -6130,8 +6130,23 @@ class AppEcriture(tk.Tk):
         self.ligne = tk.Frame(self.zone_saisie, bg=GRIS_FOND)
         self.ligne.pack(fill="x")
         bouton_orange(self.ligne, "Envoyer", self.envoyer).pack(side="right", padx=(10, 0), fill="y")
-        self.saisie = tk.Text(self.ligne, height=2, width=1, **style_zone())
+        # La boîte où tu écris, avec son « + » dedans (des images, un fichier à créer)
+        style = style_zone()
+        self.boite_saisie = tk.Frame(self.ligne, bg=style["bg"], highlightthickness=2,
+                                     highlightbackground=GRIS_BORD, highlightcolor=ORANGE)
+        self.boite_saisie.pack(side="left", fill="x", expand=True)
+        self.bouton_plus = tk.Button(
+            self.boite_saisie, text="+", command=self.ouvrir_menu_plus, bg=ORANGE, fg=NOIR,
+            activebackground=ORANGE_FONCE, activeforeground=NOIR, font=(FAMILLE, 15, "bold"),
+            relief="flat", bd=0, highlightthickness=0, width=2, cursor="hand2")
+        self.bouton_plus.pack(side="left", anchor="s", padx=(8, 0), pady=8)
+        style["highlightthickness"] = 0          # le contour est sur la boîte, autour du « + » aussi
+        self.saisie = tk.Text(self.boite_saisie, height=2, width=1, **style)
         self.saisie.pack(side="left", fill="x", expand=True)
+        self.saisie.bind("<FocusIn>", lambda e: self.boite_saisie.config(highlightbackground=ORANGE),
+                         add="+")
+        self.saisie.bind("<FocusOut>", lambda e: self.boite_saisie.config(highlightbackground=GRIS_BORD),
+                         add="+")
 
         # --- Choix de l'IA, sous la boîte ---
         self.moteurs = trouver_moteurs()
@@ -6140,7 +6155,6 @@ class AppEcriture(tk.Tk):
         self.options = tk.Frame(self.zone_saisie, bg=GRIS_FOND)
         self.options.pack(fill="x", pady=(8, 0))
         self.creer_bouton_moteur(self.options).pack(side="left")
-        self.bouton_image(self.options, self.joindre_images).pack(side="left", padx=(8, 0))
         bouton_orange(self.options, "\u2728  Magie", self.ouvrir_menu_magie, taille=10).pack(
             side="left", padx=(8, 0))
         self.creer_bouton_voix(self.options).pack(side="left", padx=(8, 0))
@@ -7773,6 +7787,18 @@ class AppEcriture(tk.Tk):
         return tk.Button(parent, text="+ Image", command=commande, bg=ORANGE, fg=NOIR,
                          activebackground=ORANGE_FONCE, activeforeground=NOIR, font=(FAMILLE, 10, "bold"),
                          relief="flat", bd=0, highlightthickness=0, padx=12, pady=5, cursor="hand2")
+
+    def ouvrir_menu_plus(self):
+        """Le « + » dans la boîte : ajouter des images, créer un fichier à envoyer."""
+        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
+                       activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
+        menu.add_command(label="Ajouter des images…", command=self.joindre_images)
+        menu.add_command(label="Créer un fichier…", command=self.creer_fichier)
+        menu.add_separator()
+        menu.add_command(label="Mes fichiers", command=self.mes_fichiers)
+        self.menu_plus = menu              # gardé pour les essais
+        b = self.bouton_plus
+        menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
 
     def choisir_images(self, parent):
         if Image is None:
