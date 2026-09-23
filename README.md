@@ -416,9 +416,10 @@ Depuis le menu de gauche, **Codex** ouvre **un seul écran, centré** : tu écri
 en bas, les réponses arrivent au milieu. Pas de panneau à gauche, pas de
 panneau à droite — comme Claude Code sur un téléphone.
 
-Il faut un token GitHub *fine-grained* avec la permission **Contents : Read and
-write** (Paramètres, ou la variable `GITHUB_TOKEN`). Ensuite **Projet ▾** liste
-tes dépôts.
+Pour tes projets GitHub, il faut un token *fine-grained* avec la permission
+**Contents : Read and write** (Paramètres, ou la variable `GITHUB_TOKEN`).
+Ensuite **Projet ▾** liste tes dépôts. Pour un dossier de ton ordi, pas besoin
+de token : c'est OpenCode qui travaille (voir plus bas).
 
 Tu dis ce que tu veux changer. **T'as rien à ouvrir** : l'assistant trouve les
 fichiers tout seul. Sur un petit projet il lit tout; sur un gros, il demande
@@ -487,6 +488,78 @@ support d'outils répondra quand même, mais sans se servir du projet.
 **Le token GitHub ne quitte jamais ton appareil.** `api.github.com` répond avec
 `Access-Control-Allow-Origin: *`, faque le navigateur l'appelle directement :
 le serveur du site ne voit ni ton token, ni ton code.
+
+### OpenCode : un dossier de ton ordi
+
+[OpenCode](https://opencode.ai) est un agent de code **gratuit pis open source**.
+Marceau le pilote pour toi : il travaille **directement dans un dossier de ton
+ordi**. Il lit tes fichiers, les change, pis lance des commandes (des tests, par
+exemple).
+
+**L'installer** (une seule fois), dans un terminal :
+
+```bash
+curl -fsSL https://opencode.ai/install | bash
+```
+
+Pas besoin de le configurer : **Marceau lui passe l'IA que t'as choisie en
+bas**. Ça peut être ta clé Claude, ou un modèle Ollama gratuit.
+
+**S'en servir** :
+
+1. Dans le Codex, clique **Projet ▾ → Un dossier sur mon ordi (avec OpenCode)…**
+   pis choisis le dossier de ton projet. Pas besoin de token GitHub.
+2. Écris ce que tu veux, comme d'habitude (« ajoute un bouton pour vider la
+   liste », « lance les tests pis corrige ce qui plante »).
+3. Pendant qu'il travaille, tu vois ce qu'il fait (« OpenCode lit app.py »,
+   « OpenCode lance : npm test »). Le bouton **Envoyer** devient **Arrêter** :
+   un clic l'arrête, lui pis les commandes qu'il a lancées.
+4. À la fin, tu as sa réponse, les fichiers qu'il a lus, les commandes lancées,
+   pis **une carte par fichier changé**. Les mêmes cartes qu'avant : un clic
+   montre les lignes en vert et en rouge.
+
+Ses changements sont **déjà enregistrés dans ton dossier**. Si t'aimes pas ça,
+**Remettre comme avant** défait tout ce qu'il vient de changer. Un fichier que
+t'as retouché depuis est laissé tel quel, par prudence. OpenCode se souvient de
+la conversation d'une demande à l'autre, pis il sait quand t'as défait ses
+changements.
+
+Tu peux aussi ouvrir un fichier (**Fichiers**), le changer à la main pis
+cliquer **Enregistrer** : ça s'écrit direct dans ton dossier.
+
+Pour **mettre OpenCode à jour** : `opencode upgrade` dans un terminal.
+
+#### Ta sécurité avec OpenCode
+
+- **Jamais en dehors de ton dossier.** Marceau lui interdit de toucher à
+  quoi que ce soit ailleurs sur ton ordi. S'il essaie, c'est bloqué, pis tu
+  le vois : « Bloqué pour te protéger : … ».
+- **Ta clé Claude reste dans son fichier protégé** (`~/.config/ecriture/cle_api`,
+  que toi seul peux lire). Marceau dit juste à OpenCode où la lire : elle est
+  jamais copiée dans sa config ni dans l'environnement, faque les commandes
+  qu'OpenCode lance la voient pas. Elle part seulement chez Claude, comme avec
+  le reste de Marceau.
+- La config d'OpenCode passe **en mémoire**, rien d'écrit sur ton disque. Le
+  partage de conversations d'OpenCode est coupé.
+- OpenCode peut lancer des commandes dans ton dossier : c'est ce qui lui
+  permet de rouler tes tests. Choisis le dossier de ton projet, pas ton
+  dossier personnel au complet.
+
+#### Avec Ollama
+
+OpenCode a de longues consignes. Avec la mémoire par défaut d'Ollama, le modèle
+les voit coupées, pis il se sert pas de ses outils. Marceau fait donc tout seul
+une **copie du modèle avec plus de mémoire** (16 384 jetons), nommée par
+exemple `qwen3:opencode`. Ça prend pas de place : c'est juste une fiche qui
+pointe sur le même modèle. Elle est cachée dans le menu de Marceau, mais tu la
+vois dans `ollama list`. Si ça rame, prends un modèle plus petit.
+
+Prends un modèle qui sait se servir d'outils : `qwen3`, `llama3.2`,
+`mistral`… Si Ollama est éteint, Marceau te le dit tout de suite au lieu
+d'attendre.
+
+La version web peut pas lancer OpenCode : c'est un programme qui roule sur ton
+ordi, pis un site a pas le droit de lancer des programmes sur ton ordi.
 
 ## Le Studio d'applications : l'IA construit une petite app
 

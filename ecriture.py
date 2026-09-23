@@ -18,6 +18,7 @@ import queue
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -134,7 +135,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 HEURES_MAJ = 6         # on revérifie les mises à jour aux 6 heures, même si l'app reste ouverte
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
@@ -295,7 +296,8 @@ def modeles_ollama():
         with urllib.request.urlopen(URL_OLLAMA + "/api/tags", timeout=2) as rep:
             data = json.loads(rep.read().decode("utf-8"))
         noms = [m["name"] for m in data.get("models", [])]
-        return sorted(n for n in noms if "embed" not in n)  # les modèles « embed » jasent pas
+        # Les modèles « embed » jasent pas, pis les copies faites pour OpenCode sont pas à montrer
+        return sorted(n for n in noms if "embed" not in n and not est_variante_opencode(n))
     except Exception:
         return []
 
@@ -3502,6 +3504,12 @@ class Onglet:
         self.texte.see("1.0")
         self.planifier()
 
+    def recharger(self, contenu):
+        """Le fichier a changé sur le disque (OpenCode) : l'onglet suit, sans « ● »."""
+        self.remplacer(contenu)
+        self.texte.edit_modified(False)   # sinon <<Modified>> le remarquerait « pas enregistré »
+        self.set_modifie(False)
+
     def ecrire_code(self, contenu, duree=None, fini=None):
         """Écrit le code en direct dans l'éditeur, vite pis fluide, avec les couleurs qui suivent."""
         self.texte.edit_separator()
@@ -3700,10 +3708,12 @@ class CarteFichier(tk.Frame):
     HAUTEUR_MAX = 460
     TAILLE = 10
 
-    def __init__(self, parent, app, chemin, avant, apres, nouveau, largeur, ouvrir_editeur):
+    def __init__(self, parent, app, chemin, avant, apres, nouveau, largeur, ouvrir_editeur,
+                 supprime=False):
         super().__init__(parent, bg=self.FOND_BARRE, highlightthickness=1,
                          highlightbackground="#5e5e5e")
         self.app = app
+        self.chemin, self.nouveau, self.supprime = chemin, nouveau, supprime
         self.ouvert = False
         lignes, ajouts, retraits = calculer_diff(avant or "", apres)
         # Un cadre vide qui impose la largeur : sans ça, la carte s'écrase sur son contenu
@@ -3714,7 +3724,9 @@ class CarteFichier(tk.Frame):
         barre = tk.Frame(self, bg=self.FOND_BARRE, cursor="hand2", height=40)
         barre.pack(fill="x")
         barre.pack_propagate(False)
-        bouton_orange(barre, "Modifier", lambda: ouvrir_editeur(chemin), taille=9).pack(side="right", padx=8)
+        if not supprime:     # un fichier supprimé, y'a plus rien à modifier
+            bouton_orange(barre, "Modifier", lambda: ouvrir_editeur(chemin),
+                          taille=9).pack(side="right", padx=8)
         self.fleche = tk.Label(barre, text="▸", bg=self.FOND_BARRE, fg=ORANGE,
                                font=(FAMILLE, 13, "bold"))
         self.fleche.pack(side="left", padx=(12, 8))
@@ -3724,8 +3736,9 @@ class CarteFichier(tk.Frame):
         compte = tk.Frame(barre, bg=self.FOND_BARRE)
         compte.pack(side="left", padx=12)
         etiquettes = [nom, self.fleche, barre, compte]
-        if nouveau:
-            e = tk.Label(compte, text="nouveau fichier", bg=self.FOND_BARRE, fg=COULEUR_AJOUT,
+        if nouveau or supprime:
+            e = tk.Label(compte, text="nouveau fichier" if nouveau else "fichier supprimé",
+                         bg=self.FOND_BARRE, fg=COULEUR_AJOUT if nouveau else COULEUR_RETRAIT,
                          font=(FAMILLE, 9, "bold"))
             e.pack(side="left", padx=(0, 10))
             etiquettes.append(e)
@@ -3787,6 +3800,360 @@ class CarteFichier(tk.Frame):
                         lambda v: self.corps.config(height=max(1, int(v))), fini, etapes=14)
 
 
+# ---------- OpenCode : un agent de code open source qui travaille dans un dossier de ton ordi ----------
+# OpenCode (opencode.ai) lit tes fichiers, les change pis lance des commandes, directement dans le
+# dossier que tu choisis. Marceau le pilote avec l'IA choisie en bas (ta clé Claude ou un modèle
+# Ollama) : t'as rien à configurer dans OpenCode. Sa config lui est passée en mémoire, pis ta clé
+# reste dans son fichier protégé : OpenCode va la lire là, elle est jamais copiée ailleurs.
+COMMANDE_OPENCODE = "curl -fsSL https://opencode.ai/install | bash"
+CTX_OLLAMA_OPENCODE = 16384      # OpenCode a de longues consignes : il faut de la mémoire au modèle
+DOSSIERS_IGNORES = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
+                    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".next", ".nuxt",
+                    ".cache", ".gradle", ".dart_tool", ".idea", "dist", "build", "target"}
+PHOTO_FICHIERS_MAX = 5000        # fichiers texte gardés en photo avant/après une demande
+PHOTO_TAILLE_MAX = 500_000       # … d'au plus 500 Ko chacun
+
+
+def trouver_opencode():
+    """Le programme opencode : dans le PATH, sinon aux places où ses installateurs le mettent
+    (lancé du menu, Marceau voit pas toujours le PATH de ton terminal)."""
+    trouve = shutil.which("opencode")
+    if trouve:
+        return trouve
+    maison = Path.home()
+    for chemin in (maison / ".opencode" / "bin" / "opencode", maison / ".local" / "bin" / "opencode",
+                   maison / ".npm-global" / "bin" / "opencode", maison / ".bun" / "bin" / "opencode",
+                   Path("/usr/local/bin/opencode")):
+        if chemin.is_file() and os.access(chemin, os.X_OK):
+            return str(chemin)
+    return None
+
+
+def variante_opencode(modele):
+    """Le nom de la copie d'un modèle Ollama qui a plus de mémoire, faite pour OpenCode."""
+    nom, deux_points, etiquette = modele.rpartition(":")
+    if not deux_points or "/" in etiquette:
+        nom, etiquette = modele, "latest"
+    return f"{nom}:opencode" if etiquette == "latest" else f"{nom}:{etiquette}-opencode"
+
+
+def est_variante_opencode(nom):
+    return nom.endswith(":opencode") or nom.endswith("-opencode")
+
+
+def ollama_post(chemin, corps, timeout=30):
+    requete = urllib.request.Request(URL_OLLAMA + chemin, data=json.dumps(corps).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(requete, timeout=timeout) as rep:
+        return json.loads(rep.read().decode("utf-8") or "{}")
+
+
+_variantes_pretes = {}   # modèle → le modèle à donner à OpenCode (vérifié une fois par lancement)
+
+
+def modele_ollama_pour_opencode(modele):
+    """Le modèle Ollama à donner à OpenCode.
+
+    Avec la mémoire d'Ollama par défaut, les consignes d'OpenCode arrivent coupées pis le modèle
+    se sert pas de ses outils. On fait donc une copie du modèle avec plus de mémoire : ça prend
+    pas de place, c'est juste une fiche qui pointe sur le même modèle. Si ça marche pas (un vieil
+    Ollama), on garde le modèle tel quel.
+    """
+    if est_variante_opencode(modele):
+        return modele
+    if modele not in _variantes_pretes:
+        choisi = modele
+        try:
+            info = ollama_post("/api/show", {"model": modele}, timeout=10)
+            memoire = re.search(r"^num_ctx\s+(\d+)", info.get("parameters") or "", re.M)
+            if not (memoire and int(memoire.group(1)) >= CTX_OLLAMA_OPENCODE):
+                variante = variante_opencode(modele)
+                ollama_post("/api/create", {"model": variante, "from": modele, "stream": False,
+                                            "parameters": {"num_ctx": CTX_OLLAMA_OPENCODE}},
+                            timeout=120)
+                choisi = variante
+        except Exception:
+            pass
+        _variantes_pretes[modele] = choisi
+    return _variantes_pretes[modele]
+
+
+def config_opencode(type_moteur, modele):
+    """La config d'OpenCode pour une demande, passée en mémoire (rien d'écrit sur le disque).
+
+    Retourne (config, « fournisseur/modèle »).
+    """
+    if type_moteur == "claude":
+        # OpenCode va lire ta clé dans le fichier protégé de Marceau : comme ça, elle traîne pas
+        # dans l'environnement, où les commandes qu'il lance pourraient la voir.
+        dans_fichier = FICHIER_CLE.exists() and FICHIER_CLE.read_text(encoding="utf-8").strip()
+        cle = "{file:" + str(FICHIER_CLE) + "}" if dans_fichier else "{env:ANTHROPIC_API_KEY}"
+        fournisseur = "anthropic"
+        reglage = {"options": {"apiKey": cle},
+                   "models": {modele: {"name": modele, "attachment": True}}}
+    else:
+        fournisseur = "ollama"
+        reglage = {"npm": "@ai-sdk/openai-compatible", "name": "Ollama (sur ton ordi)",
+                   "options": {"baseURL": URL_OLLAMA.rstrip("/") + "/v1"},
+                   "models": {modele: {"name": modele, "tool_call": True}}}
+    nom = f"{fournisseur}/{modele}"
+    return {"provider": {fournisseur: reglage}, "model": nom, "share": "disabled",
+            # Jamais en dehors du dossier que t'as choisi
+            "permission": {"external_directory": "deny"}}, nom
+
+
+def etape_opencode(partie, dossier):
+    """Un outil qu'OpenCode vient d'utiliser, résumé en français : {outil, ligne, fichier, …}."""
+    outil = partie.get("tool") or ""
+    etat = partie.get("state") or {}
+    entree = etat.get("input") or {}
+    fichier = entree.get("filePath") or entree.get("path") or ""
+    if fichier:
+        try:
+            fichier = Path(fichier).resolve().relative_to(Path(dossier).resolve()).as_posix()
+        except (ValueError, OSError):
+            pass
+    commande = " ".join(str(entree.get("command") or "").split())
+    if len(commande) > 70:
+        commande = commande[:69] + "…"
+    if outil == "read":
+        ligne = f"lit {fichier}"
+    elif outil == "write":
+        ligne = f"écrit {fichier}"
+    elif outil in ("edit", "multiedit", "patch", "apply_patch"):
+        ligne = f"change {fichier}" if fichier else "change des fichiers"
+    elif outil == "bash":
+        ligne = f"lance : {commande}"
+    elif outil in ("glob", "grep", "list", "ls", "codesearch"):
+        ligne = "cherche " + (entree.get("pattern") or entree.get("query") or fichier or "dans tes fichiers")
+    elif outil == "webfetch":
+        ligne = "lit la page " + str(entree.get("url") or "")
+    elif outil == "websearch":
+        ligne = "cherche sur le web : " + str(entree.get("query") or "")
+    elif outil in ("todowrite", "todoread"):
+        ligne = "met son plan à jour"
+    elif outil == "task":
+        ligne = "confie une partie à un assistant : " + str(entree.get("description") or "")
+    else:
+        ligne = f"utilise l'outil {outil}"
+    erreur = str(etat.get("error") or "") if etat.get("status") == "error" else ""
+    refuse = bool(erreur) and any(m in erreur.lower() for m in ("rule", "rejected", "permission"))
+    if erreur:
+        ligne += " (refusé)" if refuse else " (erreur)"
+    return {"outil": outil, "ligne": ligne, "fichier": fichier, "commande": commande,
+            "refuse": refuse}
+
+
+def lancer_opencode(programme, dossier, demande, type_moteur, modele, session=None, images=(),
+                    progres=lambda ligne: None, garder=lambda processus: None,
+                    arreter=lambda: False):
+    """Fait faire une demande à OpenCode dans le dossier. Roule dans un fil à part.
+
+    progres(ligne) est appelé à chaque étape (« lit app.py », « lance : npm test »…) ;
+    garder(processus) reçoit le programme lancé, pour pouvoir l'arrêter.
+    Retourne {"texte", "session", "etapes", "erreur", "code", "journal", "session_perdue"}.
+    """
+    resultat = {"texte": "", "session": session, "etapes": [], "erreur": None, "code": 0,
+                "journal": "", "session_perdue": False}
+    if type_moteur == "ollama":
+        if not ollama_repond():   # sinon OpenCode réessaie longtemps avant d'abandonner
+            resultat["erreur"] = {"name": "APIError", "data": {"message": "Cannot connect to Ollama"}}
+            return resultat
+        progres("prépare le modèle")
+        modele = modele_ollama_pour_opencode(modele)
+    if arreter():
+        return resultat
+    config, nom = config_opencode(type_moteur, modele)
+    env = dict(os.environ, OPENCODE_CONFIG_CONTENT=json.dumps(config))
+    commande = [programme, "run", "--format", "json", "--dir", str(dossier), "-m", nom,
+                "--title", "Marceau : " + " ".join(demande.split())[:60]]
+    if session:
+        commande += ["--session", session]
+    for image in images:
+        commande += ["--file", str(image)]
+    p = subprocess.Popen(commande, cwd=str(dossier), env=env, stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         encoding="utf-8", errors="replace", start_new_session=True)
+    garder(p)
+    if arreter():   # « Arrêter » cliqué juste pendant le départ
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(p.pid, signal.SIGTERM)
+            else:
+                p.terminate()
+        except OSError:
+            pass
+    erreurs = []
+    lecteur = threading.Thread(target=lambda: erreurs.append(p.stderr.read()), daemon=True)
+    lecteur.start()
+    try:
+        # La demande passe par l'entrée du programme : les guillemets, les « - » pis les
+        # retours de ligne arrivent tels quels.
+        p.stdin.write(demande)
+        p.stdin.close()
+    except OSError:
+        pass
+    textes = []
+    for ligne in p.stdout:
+        try:
+            evenement = json.loads(ligne)
+        except ValueError:
+            continue
+        resultat["session"] = evenement.get("sessionID") or resultat["session"]
+        sorte, partie = evenement.get("type"), evenement.get("part") or {}
+        if sorte == "text" and (partie.get("text") or "").strip():
+            textes.append(partie["text"].strip())
+        elif sorte == "tool_use":
+            etape = etape_opencode(partie, dossier)
+            resultat["etapes"].append(etape)
+            progres(etape["ligne"])
+        elif sorte == "error":
+            resultat["erreur"] = evenement.get("error") or {"name": "Erreur"}
+    resultat["code"] = p.wait()
+    lecteur.join(timeout=2)
+    journal = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", "".join(erreurs)).strip()
+    resultat["journal"] = journal[-1500:]
+    resultat["texte"] = "\n\n".join(textes)
+    resultat["session_perdue"] = bool(session and resultat["code"] and not textes
+                                      and "session not found" in journal.lower())
+    return resultat
+
+
+def descendants(pid):
+    """Les programmes lancés par pid, pis ceux qu'eux ont lancés (sur Linux, via /proc).
+
+    OpenCode lance ses commandes dans leur propre groupe : arrêter OpenCode seul les laisserait
+    rouler toutes seules.
+    """
+    enfants = {}
+    try:
+        numeros = [d for d in os.listdir("/proc") if d.isdigit()]
+    except OSError:
+        return []
+    for d in numeros:
+        try:
+            with open(f"/proc/{d}/stat", "rb") as f:
+                stat = f.read().decode("utf-8", "replace")
+            parent = int(stat.rsplit(")", 1)[1].split()[1])   # « pid (nom) état parent … »
+        except (OSError, ValueError, IndexError):
+            continue
+        enfants.setdefault(parent, []).append(int(d))
+    trouves, a_voir = [], [pid]
+    while a_voir:
+        for enfant in enfants.get(a_voir.pop(), []):
+            trouves.append(enfant)
+            a_voir.append(enfant)
+    return trouves
+
+
+def message_opencode(erreur, type_moteur, modele):
+    """Traduit une erreur d'OpenCode en français clair."""
+    donnees = erreur.get("data") or {}
+    texte = str(donnees.get("message") or erreur.get("name") or "")
+    bas = texte.lower()
+    statut = donnees.get("statusCode")
+    if statut in (401, 403) or "api key" in bas or "x-api-key" in bas or "authentication" in bas:
+        return ("Ta clé API Claude est refusée. Vérifie-la dans Paramètres (menu ☰), "
+                "pis renvoie ta demande.")
+    if "connect" in bas or "econnrefused" in bas or "fetch failed" in bas:
+        if type_moteur == "ollama":
+            return "OpenCode trouve pas Ollama sur ton ordi.\n\n" + MESSAGE_OLLAMA
+        return "OpenCode arrive pas à joindre Claude. Vérifie ton Internet, pis réessaie."
+    if statut == 429 or "rate limit" in bas:
+        return "Trop de demandes d'un coup pour ta clé. Attends une minute, pis réessaie."
+    if "credit" in bas or "billing" in bas:
+        return "Ton compte Claude a plus de crédit. Ajoutes-en sur console.anthropic.com."
+    if statut in (500, 502, 503, 529) or "overloaded" in bas:
+        return "L'IA est débordée en ce moment. Réessaie dans une minute."
+    return (f"OpenCode a eu un problème avec {modele} : {texte or 'erreur inconnue'}. "
+            "Si ça recommence, essaie une autre IA dans le menu en bas.")
+
+
+def fichiers_du_dossier(dossier):
+    """Chaque fichier du dossier (chemin relatif, chemin complet), sans les dossiers lourds
+    que personne touche à la main (.git, node_modules…)."""
+    for racine, sous, fichiers in os.walk(dossier):
+        sous[:] = sorted(d for d in sous if d not in DOSSIERS_IGNORES)
+        for nom in sorted(fichiers):
+            chemin = Path(racine) / nom
+            yield chemin.relative_to(dossier).as_posix(), chemin
+
+
+def arbre_local(dossier, maximum=20_000):
+    """La liste des fichiers d'un dossier de ton ordi, pareille à celle d'un projet GitHub."""
+    arbre = {}
+    for relatif, chemin in fichiers_du_dossier(dossier):
+        try:
+            if chemin.is_symlink() or not chemin.is_file():
+                continue
+            arbre[relatif] = {"sha": None, "taille": chemin.stat().st_size}
+        except OSError:
+            continue
+        if len(arbre) >= maximum:
+            break
+    return arbre
+
+
+def photo_dossier(dossier):
+    """Ce qu'il y a dans les fichiers texte du dossier, pour voir après ce qu'OpenCode a changé.
+
+    Retourne (photo, complète?) : un dossier géant est photographié en partie seulement.
+    """
+    photo = {}
+    for relatif, chemin in fichiers_du_dossier(dossier):
+        try:
+            if chemin.is_symlink() or not chemin.is_file() or \
+                    chemin.stat().st_size > PHOTO_TAILLE_MAX:
+                continue
+            octets = chemin.read_bytes()
+        except OSError:
+            continue
+        if b"\0" in octets[:8192]:
+            continue                   # un fichier binaire (image, programme…)
+        try:
+            photo[relatif] = octets.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if len(photo) >= PHOTO_FICHIERS_MAX:
+            return photo, False
+    return photo, True
+
+
+def changements_dossier(avant, apres, complete=True):
+    """Ce qui a changé entre deux photos : [(chemin, avant, après, nouveau?, supprimé?)]."""
+    liste = []
+    for chemin in sorted(set(avant) | set(apres)):
+        a, b = avant.get(chemin), apres.get(chemin)
+        if a == b or (not complete and (a is None or b is None)):
+            continue       # dossier géant : un fichier hors de la photo, c'est pas un changement
+        liste.append((chemin, a or "", b or "", a is None, b is None))
+    return liste
+
+
+def remettre_comme_avant(dossier, liste):
+    """Défait des changements. Un fichier retouché depuis est laissé tel quel, par prudence.
+
+    Retourne (remis, laissés).
+    """
+    remis, laisses = [], []
+    for chemin, avant, apres, nouveau, supprime in liste:
+        cible = Path(dossier) / chemin
+        try:
+            actuel = cible.read_bytes().decode("utf-8") if cible.is_file() else None
+            if actuel != (None if supprime else apres):
+                laisses.append(chemin)
+                continue
+            if nouveau:
+                cible.unlink()
+            else:
+                cible.parent.mkdir(parents=True, exist_ok=True)
+                cible.write_bytes(avant.encode("utf-8"))
+            remis.append(chemin)
+        except (OSError, UnicodeDecodeError):
+            laisses.append(chemin)
+    return remis, laisses
+
+
 # ---------- Le Codex : fichiers GitHub à gauche, éditeur au centre, assistant à droite ----------
 class CodexVue(tk.Frame):
     """Le Codex : un seul écran, centré. Tu écris en bas, les fichiers touchés
@@ -3808,6 +4175,12 @@ class CodexVue(tk.Frame):
         self.occupe = False
         self.nb_liens = 0
         self.pieces = []             # images jointes à la prochaine demande
+        self.dossier = None          # un dossier de ton ordi (OpenCode) au lieu d'un projet GitHub
+        self.oc_session = None       # la conversation d'OpenCode dans ce dossier
+        self.oc_processus = None     # OpenCode en train de travailler (pour pouvoir l'arrêter)
+        self.oc_en_cours = False
+        self.oc_arrete = False
+        self.oc_note = ""            # un mot à glisser à OpenCode dans ta prochaine demande
 
         self.construire_barre()
         self.etat_label = tk.Label(self, text="", anchor="w", bg=GRIS_MENU, fg=NOIR,
@@ -3818,9 +4191,11 @@ class CodexVue(tk.Frame):
         self.construire_conversation()
         self.construire_editeur()
         if self.token:
-            self.etat("Choisis un projet GitHub en haut, pis dis-moi quoi changer.")
+            self.etat("Choisis un projet en haut (GitHub, ou un dossier de ton ordi avec OpenCode), "
+                      "pis dis-moi quoi changer.")
         else:
-            self.etat("Ajoute ton token GitHub dans Paramètres (menu ☰) pour ouvrir tes projets.")
+            self.etat("Choisis un dossier de ton ordi dans « Projet ▾ » (OpenCode travaille dedans), "
+                      "ou ajoute ton token GitHub dans Paramètres (menu ☰) pour tes projets GitHub.")
 
     # ----- Construction -----
     def construire_barre(self):
@@ -3892,7 +4267,8 @@ class CodexVue(tk.Frame):
         centre.place(relx=0.5, rely=0.5, anchor="center", relwidth=LARGEUR)
         ligne = tk.Frame(centre, bg=GRIS_FOND)
         ligne.pack(fill="x")
-        bouton_orange(ligne, "Envoyer", self.envoyer).pack(side="right", padx=(10, 0), fill="y")
+        self.bouton_envoyer = bouton_orange(ligne, "Envoyer", self.clic_envoyer)
+        self.bouton_envoyer.pack(side="right", padx=(10, 0), fill="y")
         self.saisie = tk.Text(ligne, height=2, width=1, **style_zone())
         self.saisie.pack(side="left", fill="x", expand=True)
         options = tk.Frame(centre, bg=GRIS_FOND)
@@ -4007,37 +4383,39 @@ class CodexVue(tk.Frame):
                   "Plus de token GitHub. Ajoutes-en un dans Paramètres pour ouvrir tes projets.")
 
     def menu_projets(self):
-        if not self.token:
-            self.etat("Ajoute d'abord ton token GitHub dans Paramètres.")
-            self.app.ouvrir_parametres("github")
+        if self.token and not self.depots:
+            self.etat("Chargement de tes projets GitHub…")
+            token = self.token
+            self.app.en_arriere_plan(
+                lambda: github("GET", "/user/repos?per_page=100&sort=updated", token),
+                self.depots_recus)
             return
-        if self.depots:
-            self.afficher_menu_projets()
-            return
-        self.etat("Chargement de tes projets GitHub…")
-        token = self.token
-        self.app.en_arriere_plan(
-            lambda: github("GET", "/user/repos?per_page=100&sort=updated", token), self.depots_recus)
+        self.afficher_menu_projets()
 
     def depots_recus(self, depots, err):
         if err:
             self.etat(erreur_github(err))
-            return
-        self.depots = depots or []
-        if not self.depots:
-            self.etat("Aucun projet trouvé avec ce token.")
-            return
-        self.etat(f"{len(self.depots)} projets trouvés.")
-        self.afficher_menu_projets()
+        else:
+            self.depots = depots or []
+            self.etat(f"{len(self.depots)} projets trouvés." if self.depots else
+                      "Aucun projet trouvé avec ce token.")
+        self.afficher_menu_projets()   # le dossier de ton ordi reste offert, même si GitHub bloque
 
     def afficher_menu_projets(self):
         menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
                        activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
+        menu.add_command(label="Un dossier sur mon ordi (avec OpenCode)…", command=self.choisir_dossier)
+        menu.add_separator()
+        if not self.token:
+            menu.add_command(label="Brancher mes projets GitHub (Paramètres)…",
+                             command=lambda: self.app.ouvrir_parametres("github"))
         for d in self.depots[:40]:
             menu.add_command(label=d["full_name"], command=lambda d=d: self.ouvrir_depot(
                 d["full_name"], d.get("default_branch") or "main"))
-        menu.add_separator()
-        menu.add_command(label="Recharger la liste", command=self.recharger_depots)
+        if self.token:
+            menu.add_separator()
+            menu.add_command(label="Recharger la liste", command=self.recharger_depots)
+        self.menu_projet = menu        # gardé pour les essais
         b = self.bouton_projet
         menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
 
@@ -4067,13 +4445,10 @@ class CodexVue(tk.Frame):
             self.etat(erreur_github(err))
             return
         arbre, tronque = resultat
-        for o in self.onglets:
-            o.cadre.destroy()
-        self.onglets, self.actif = [], None
-        self.dessiner_onglets()
-        self.vide_editeur.place(relx=0.5, rely=0.45, anchor="center")
+        self.vider_onglets()
         self.depot, self.branche, self.arbre, self.cache = nom, branche, arbre, {}
         self.avant = {}
+        self.dossier, self.oc_session, self.oc_note = None, None, ""
         self.bouton_projet.config(text=f"{nom.split('/')[-1][:22]}  ▾")
         self.etat(f"{nom} ({branche}) : {len(arbre)} fichiers."
                   + (" Liste incomplète (projet très gros)." if tronque else "")
@@ -4098,6 +4473,9 @@ class CodexVue(tk.Frame):
             return
         if info["taille"] > 2_000_000:
             self.etat("Fichier trop gros pour l'éditeur (plus de 2 Mo).")
+            return
+        if self.dossier is not None:
+            self.ouvrir_fichier_local(chemin)
             return
         if chemin in self.cache:
             self.activer(self.creer_onglet(chemin, self.cache[chemin], info["sha"]))
@@ -4134,7 +4512,10 @@ class CodexVue(tk.Frame):
         if montrer:
             self.ouvrir_editeur()
             onglet.texte.focus_set()
-        self.etat(onglet.chemin + ("" if onglet.sha else "   (pas encore sur GitHub)"))
+        if self.dossier is not None:
+            self.etat(str(self.dossier / onglet.chemin) + ("   (pas enregistré)" if onglet.modifie else ""))
+        else:
+            self.etat(onglet.chemin + ("" if onglet.sha else "   (pas encore sur GitHub)"))
 
     def activer_chemin(self, chemin):
         o = self.trouver_onglet(chemin)
@@ -4200,6 +4581,9 @@ class CodexVue(tk.Frame):
         onglets = [o for o in onglets if o.modifie]
         if not onglets:
             self.etat("Rien à enregistrer : aucun fichier modifié.")
+            return
+        if self.dossier is not None:   # un dossier de ton ordi : on écrit directement dedans
+            self.enregistrer_local(onglets)
             return
         if not self.depot:   # pas de projet GitHub ouvert : on sauvegarde sur l'ordi
             for o in onglets:
@@ -4323,12 +4707,18 @@ class CodexVue(tk.Frame):
                 self.etat("Ajoute ta clé API Claude dans Paramètres, pis renvoie ta demande.")
                 self.app.ouvrir_parametres("claude")
                 return "break"
+        if self.dossier is not None and not trouver_opencode():
+            self.montrer_manque_opencode()
+            return "break"
         self.saisie.delete("1.0", "end")
         if not self.messages:
             self.effacer_accueil()           # le logo d'accueil s'en va
             self.chat.delete("1.0", "end")
         self.chat.insert("end", question + "\n", "question")
         self.messages.append({"role": "user", "content": question})
+        if self.dossier is not None:
+            self.envoyer_opencode(question, moteur)
+            return "break"
         historique = [dict(m) for m in self.messages[-8:]]
         while historique and historique[0]["role"] != "user":
             historique.pop(0)
@@ -4533,6 +4923,327 @@ class CodexVue(tk.Frame):
                                  self.activer_chemin)
             self.chat.window_create("end", window=carte, pady=5)
             self.chat.insert("end", "\n")
+
+    # ----- OpenCode : il travaille dans un dossier de ton ordi -----
+    def clic_envoyer(self):
+        """Le bouton sous la boîte : « Envoyer », ou « Arrêter » pendant qu'OpenCode travaille."""
+        if self.oc_en_cours:
+            self.arreter_opencode()
+        else:
+            self.envoyer()
+
+    def arreter_opencode(self):
+        """Arrête OpenCode, pis les commandes qu'il a lancées. Ce qu'il a déjà changé reste montré."""
+        if not self.oc_en_cours:
+            return
+        self.oc_arrete = True
+        self.maj_attente("J'arrête OpenCode")
+        p = self.oc_processus
+        if p is None or p.poll() is not None:
+            return
+        # La liste AVANT d'arrêter OpenCode : après, ses commandes auraient plus de parent
+        lances = descendants(p.pid)
+
+        def tuer(sorte):
+            for pid in lances:
+                try:
+                    os.kill(pid, sorte)
+                except OSError:
+                    pass       # déjà fini
+            if p.poll() is None:
+                try:
+                    if hasattr(os, "killpg"):
+                        os.killpg(p.pid, sorte)   # OpenCode pis son groupe
+                    else:
+                        p.kill()
+                except OSError:
+                    pass
+
+        tuer(signal.SIGTERM)
+        self.after(3000, lambda: tuer(getattr(signal, "SIGKILL", signal.SIGTERM)))
+
+    def choisir_dossier(self):
+        """« Un dossier sur mon ordi » : OpenCode va travailler dedans."""
+        if not trouver_opencode():
+            self.montrer_manque_opencode()
+            return
+        dossier = filedialog.askdirectory(title="Le dossier où OpenCode va travailler",
+                                          mustexist=True, parent=self)
+        if dossier:
+            self.ouvrir_dossier(dossier)
+
+    def montrer_manque_opencode(self):
+        """OpenCode est pas installé : on explique quoi faire, avec la commande à copier."""
+        fen = tk.Toplevel(self, bg=GRIS_MENU)
+        fen.title("Installer OpenCode")
+        fen.transient(self.winfo_toplevel())
+        fen.resizable(False, False)
+        cadre = tk.Frame(fen, bg=GRIS_MENU)
+        cadre.pack(padx=24, pady=20)
+        style = dict(bg=GRIS_MENU, fg=NOIR, font=(FAMILLE, 11), justify="left", wraplength=470)
+        tk.Label(cadre, text="OpenCode n'est pas installé sur ton ordi.", bg=GRIS_MENU, fg=NOIR,
+                 font=(FAMILLE, 13, "bold")).pack(anchor="w")
+        tk.Label(cadre, text="OpenCode, c'est un agent de code gratuit pis open source : il travaille "
+                             "directement dans un dossier de ton ordi (il lit tes fichiers, les change "
+                             "pis lance des commandes).\n\nPour l'installer, copie-colle ça dans un "
+                             "terminal :", **style).pack(anchor="w", pady=(10, 6))
+        champ = tk.Entry(cadre, font=(FAMILLE_CODE, 11), bg=GRIS_ZONE, fg=NOIR, relief="flat", bd=0,
+                         readonlybackground=GRIS_ZONE, highlightthickness=0, width=46)
+        champ.insert(0, COMMANDE_OPENCODE)
+        champ.config(state="readonly")
+        champ.pack(fill="x", ipady=6)
+        tk.Label(cadre, text="Ensuite, reviens ici pis choisis ton dossier dans « Projet ▾ ». Pas "
+                             "besoin de le configurer : Marceau lui passe l'IA que t'as choisie en bas.",
+                 **style).pack(anchor="w", pady=(10, 0))
+        boutons = tk.Frame(cadre, bg=GRIS_MENU)
+        boutons.pack(fill="x", pady=(16, 0))
+
+        def copier():
+            self.clipboard_clear()
+            self.clipboard_append(COMMANDE_OPENCODE)
+            copie.config(text="Copié!")
+
+        copie = bouton_orange(boutons, "Copier la commande", copier, taille=10)
+        copie.pack(side="left")
+        bouton_orange(boutons, "Fermer", fen.destroy, taille=10).pack(side="right")
+        fen.bind("<Escape>", lambda e: fen.destroy())
+        self.fenetre_opencode = fen
+        self.etat("OpenCode est pas installé : la marche à suivre est dans la petite fenêtre.")
+
+    def ouvrir_dossier(self, dossier):
+        """Ouvre un dossier de ton ordi : c'est OpenCode qui va travailler dedans."""
+        dossier = Path(dossier).expanduser().resolve()
+        if any(o.modifie for o in self.onglets) and not messagebox.askyesno(
+                "Changer de projet", "Des fichiers ont des changements pas enregistrés.\n"
+                "Changer de projet quand même?", parent=self):
+            return
+        self.etat(f"Ouverture de {dossier}…")
+        self.app.en_arriere_plan(lambda: arbre_local(dossier),
+                                 lambda arbre, err: self.dossier_recu(dossier, arbre, err))
+
+    def dossier_recu(self, dossier, arbre, err):
+        if err:
+            self.etat(f"Impossible d'ouvrir ce dossier : {err}")
+            return
+        self.vider_onglets()
+        self.depot, self.branche, self.arbre, self.cache, self.avant = None, None, arbre, {}, {}
+        self.dossier, self.oc_session, self.oc_note = dossier, None, ""
+        self.bouton_projet.config(text=f"{(dossier.name or str(dossier))[:22]}  ▾")
+        moteur = self.app.moteurs.get(self.app.choix.get())
+        avec = f" avec {nom_court(moteur)}" if moteur else ""
+        self.etat(f"{dossier} : {len(arbre)} fichiers. OpenCode va travailler dedans{avec} "
+                  "(l'IA choisie en bas). Dis-moi quoi faire."
+                  + (" C'est un gros dossier : choisis plutôt celui de ton projet."
+                     if len(arbre) >= 20_000 else ""))
+
+    def vider_onglets(self):
+        for o in self.onglets:
+            o.cadre.destroy()
+        self.onglets, self.actif = [], None
+        self.dessiner_onglets()
+        self.vide_editeur.place(relx=0.5, rely=0.45, anchor="center")
+
+    def ouvrir_fichier_local(self, chemin):
+        """Ouvre un fichier du dossier dans l'éditeur (le texte, ou l'image)."""
+        try:
+            octets = (self.dossier / chemin).read_bytes()
+        except OSError as e:
+            self.etat(f"Impossible d'ouvrir {chemin} : {e.strerror or e}")
+            return
+        if Path(chemin).suffix.lower() in EXT_IMAGES and Image is not None:
+            self.ajouter_image_octets(chemin, octets, modifie=False)
+            return
+        try:
+            texte = octets.decode("utf-8")
+        except UnicodeDecodeError:
+            self.etat(f"{chemin} n'est pas du texte : l'éditeur peut pas l'ouvrir.")
+            return
+        self.activer(self.creer_onglet(chemin, texte))
+
+    def ouvrir_chemin_local(self, chemin, dossier):
+        """« Modifier » sur une carte : l'onglet s'il est ouvert, sinon le fichier du disque."""
+        if dossier != self.dossier:
+            self.etat("Ce fichier-là est dans un autre dossier que celui ouvert.")
+            return
+        o = self.trouver_onglet(chemin)
+        if o:
+            self.activer(o)
+        else:
+            self.ouvrir_fichier(chemin)
+
+    def enregistrer_local(self, onglets):
+        """« Enregistrer » dans un dossier de ton ordi : ça s'écrit directement dedans."""
+        faits = []
+        for o in onglets:
+            cible = (self.dossier / o.chemin).resolve()
+            if not cible.is_relative_to(self.dossier):
+                self.etat(f"{o.chemin} sort du dossier : pas enregistré.")
+                continue
+            try:
+                cible.parent.mkdir(parents=True, exist_ok=True)
+                cible.write_bytes(o.octets if o.est_image else o.contenu().encode("utf-8"))
+            except OSError as e:
+                self.etat(f"Impossible d'enregistrer {o.chemin} : {e.strerror or e}")
+                return
+            o.set_modifie(False)
+            self.arbre[o.chemin] = {"sha": None, "taille": cible.stat().st_size}
+            faits.append(Path(o.chemin).name)
+        if faits:
+            self.etat(f"Enregistré dans ton dossier : {', '.join(faits)}.")
+
+    def envoyer_opencode(self, question, moteur):
+        """La demande part à OpenCode, qui travaille directement dans ton dossier."""
+        type_moteur, modele = moteur
+        programme, dossier, session = trouver_opencode(), self.dossier, self.oc_session
+        pieces, self.pieces = self.pieces, []
+        self.app.dessiner_pieces(self.cadre_pieces, self.pieces, self.retirer_piece)
+        images = []
+        if pieces:
+            self.app.montrer_vignettes(self.chat, pieces, 90)
+            if type_moteur == "claude":
+                images = [p["chemin"] for p in pieces if p.get("chemin")]
+        demande = question
+        if pieces and not images:
+            demande += "\n(J'avais joint des images, mais ce modèle-là peut pas les voir.)"
+        if self.oc_note:
+            demande, self.oc_note = self.oc_note + "\n\n" + demande, ""
+        self.app.voix.taire()           # on arrête de lire l'ancienne réponse
+        self.app.avatar(self.chat)      # le logo Marceau devant la réponse qui s'en vient
+        self.points = ajouter_ligne_attente(
+            self.chat, f"OpenCode ({nom_court(moteur)}) travaille dans « {dossier.name} »", 14,
+            ("attente", "attente_codex"))
+        self.occupe, self.oc_en_cours, self.oc_arrete = True, True, False
+        self.bouton_envoyer.config(text="Arrêter")
+
+        def progres(ligne):
+            self.app.depuis_fil(lambda: self.maj_attente("OpenCode " + ligne))
+
+        def garder(processus):
+            self.oc_processus = processus
+
+        def travail():
+            avant, complete = photo_dossier(dossier)
+            resultat = lancer_opencode(programme, dossier, demande, type_moteur, modele, session,
+                                       images, progres, garder, lambda: self.oc_arrete)
+            if resultat["session_perdue"]:   # OpenCode a oublié la conversation : on en recommence une
+                resultat = lancer_opencode(programme, dossier, demande, type_moteur, modele, None,
+                                           images, progres, garder, lambda: self.oc_arrete)
+            apres, complete_apres = photo_dossier(dossier)
+            resultat["changements"] = changements_dossier(avant, apres, complete and complete_apres)
+            resultat["arbre"] = arbre_local(dossier)
+            return resultat
+
+        self.app.en_arriere_plan(travail, lambda r, err: self.reponse_opencode(
+            r, err, dossier, type_moteur, modele))
+
+    def reponse_opencode(self, resultat, err, dossier, type_moteur, modele):
+        enlever_ligne_attente(self.chat, "attente_codex", getattr(self, "points", None))
+        self.points, self.oc_processus, self.oc_en_cours = None, None, False
+        arrete, self.oc_arrete = self.oc_arrete, False
+        self.bouton_envoyer.config(text="Envoyer")
+        if err:
+            self.messages.pop()
+            self.app.ecrire(self.chat, f"OpenCode a pas pu partir : {err}", lambda: True,
+                            self.fin_opencode)
+            return
+        changements = resultat["changements"]
+        if dossier == self.dossier:
+            self.arbre = resultat["arbre"]
+            if resultat["session"]:
+                self.oc_session = resultat["session"]
+            for chemin, avant, apres, nouveau, supprime in changements:
+                o = self.trouver_onglet(chemin)      # un onglet ouvert suit le fichier changé
+                if o is not None and not o.est_image and not o.modifie and not supprime:
+                    o.recharger(apres)
+        if arrete:
+            texte = "Arrêté. " + ("Voici ce qu'OpenCode avait déjà changé." if changements else
+                                  "OpenCode avait rien changé.")
+        elif resultat["erreur"]:
+            texte = message_opencode(resultat["erreur"], type_moteur, modele)
+        elif resultat["texte"]:
+            texte = resultat["texte"]
+        elif changements:
+            texte = "C'est fait, regarde les fichiers."
+        elif resultat["code"]:
+            derniere = (resultat["journal"].splitlines() or [""])[-1]
+            texte = "OpenCode s'est arrêté sans répondre." + (f" Il dit : {derniere}" if derniere else "")
+        else:
+            texte = "OpenCode a rien répondu cette fois-ci. Reformule ta demande."
+        noms = [c for c, *_ in changements]
+        self.messages.append({"role": "assistant", "content": texte + (
+            f"\n(Fichiers changés : {', '.join(noms)})" if noms else "")})
+
+        def fini():
+            self.fin_opencode(resultat["etapes"], changements, dossier)
+            if not arrete:
+                self.app.dire_a_voix_haute(texte, self.chat)
+
+        self.app.ecrire(self.chat, texte, lambda: True, fini)
+
+    def fin_opencode(self, etapes=(), changements=(), dossier=None):
+        """Après la réponse : ce qu'OpenCode a fait, en petit, pis une carte par fichier changé."""
+        lus = list(dict.fromkeys(e["fichier"] for e in etapes if e["outil"] == "read" and e["fichier"]))
+        commandes = [e["commande"] for e in etapes if e["outil"] == "bash" and e["commande"]]
+        bloques = [e["ligne"].removesuffix(" (refusé)") for e in etapes if e["refuse"]]
+        if lus:
+            noms = ", ".join(Path(c).name for c in lus[:8]) + (f" (+{len(lus) - 8})" if len(lus) > 8 else "")
+            self.chat.insert("end", f"OpenCode a lu : {noms}\n", "sources")
+        if commandes:
+            self.chat.insert("end", "Commandes lancées : " + "  ·  ".join(commandes[:6])
+                             + (f" (+{len(commandes) - 6})" if len(commandes) > 6 else "") + "\n",
+                             "sources")
+        if bloques:
+            self.chat.insert("end", "Bloqué pour te protéger : " + "; ".join(bloques[:4]) + "\n",
+                             "sources")
+        if changements:
+            self.cartes_opencode(changements, dossier)
+        self.chat.see("end")
+        self.occupe = False
+
+    def cartes_opencode(self, changements, dossier):
+        """Une carte par fichier changé, pis un bouton pour tout remettre comme avant."""
+        self.chat.update_idletasks()
+        largeur = max(self.chat.winfo_width() - 34, 320)
+        for chemin, avant, apres, nouveau, supprime in changements:
+            carte = CarteFichier(self.chat, self.app, chemin, avant, apres, nouveau, largeur,
+                                 lambda c, d=dossier: self.ouvrir_chemin_local(c, d),
+                                 supprime=supprime)
+            self.chat.window_create("end", window=carte, pady=5)
+            self.chat.insert("end", "\n")
+        bouton = bouton_orange(self.chat, "Remettre comme avant", None, taille=9)
+        bouton.config(command=lambda: self.annuler_opencode(dossier, changements, bouton))
+        self.chat.window_create("end", window=bouton, pady=4)
+        self.chat.insert("end", "  C'est déjà enregistré dans ton dossier. Clique un fichier pour "
+                                "voir ce qui a changé.\n", "sources")
+
+    def annuler_opencode(self, dossier, changements, bouton):
+        """« Remettre comme avant » : défait ce qu'OpenCode vient de changer."""
+        if self.oc_en_cours:
+            self.etat("Attends qu'OpenCode ait fini avant de remettre comme avant.")
+            return
+        remis, laisses = remettre_comme_avant(dossier, changements)
+        bouton.config(text="Remis comme avant" if remis else "Rien à remettre", state="disabled",
+                      cursor="")
+        if dossier == self.dossier:
+            self.arbre = arbre_local(dossier)
+            for chemin, avant, apres, nouveau, supprime in changements:
+                o = self.trouver_onglet(chemin)
+                if chemin not in remis or o is None or o.est_image or o.modifie:
+                    continue
+                if nouveau:
+                    self.fermer_onglet(o)      # le fichier existe plus
+                else:
+                    o.recharger(avant)
+            if remis:   # OpenCode le saura à ta prochaine demande
+                self.oc_note = ("(Note de Marceau : j'ai défait tes derniers changements. Ces "
+                                f"fichiers sont revenus comme avant : {', '.join(remis)}.)")
+        message = f"Remis comme avant : {', '.join(Path(c).name for c in remis)}." if remis else ""
+        if laisses:
+            message += ((" " if message else "") + "Pas touché, parce que changé depuis : "
+                        + ", ".join(Path(c).name for c in laisses) + ".")
+        self.etat(message or "Rien à remettre.")
+        self.chat.insert("end", (message or "Rien à remettre.") + "\n", "sources")
+        self.chat.see("end")
 
 
 # ---------- L'application ----------
@@ -5403,6 +6114,8 @@ class AppEcriture(tk.Tk):
                 return
         self.voix.taire()      # sinon la voix du système continue de parler, l'app fermée
         self.apercu.arreter()
+        if self.codex:
+            self.codex.arreter_opencode()   # OpenCode s'arrête avec l'app
         self.destroy()
 
     # ---------- Positions ----------
