@@ -431,8 +431,8 @@ d'autres avant d'écrire — deux tours au maximum, pour pas tourner en rond.
 Chaque fichier touché arrive dans la conversation en **carte fermée** :
 
 ```
-▸ src/app.py    +2 −1                          [Modifier]
-▸ src/neuf.py   nouveau fichier  +1            [Modifier]
+▸ src/app.py    +2 −1                   [Projet] [Modifier]
+▸ src/neuf.py   nouveau fichier  +1     [Projet] [Modifier]
 ```
 
 Un clic l'ouvre et montre **ce qui a changé**, pas juste le fichier :
@@ -445,6 +445,11 @@ Un clic l'ouvre et montre **ce qui a changé**, pas juste le fichier :
 
 Un fichier neuf s'affiche tout en vert. Le bouton **Modifier** ouvre l'éditeur
 par-dessus l'écran, avec la coloration et les onglets; **‹ Retour** te ramène.
+**Projet** garde le code du fichier dans un de tes projets (voir « Les
+projets » plus bas).
+
+Si l'éditeur est ouvert pendant que l'IA travaille, tu vois ses fichiers
+**s'écrire en direct, un après l'autre**. Fermé, ils arrivent d'un coup.
 
 **Fichiers** ouvre la liste du projet dans une fenêtre, si tu veux aller voir
 un fichier toi-même. **Enregistrer (N)** dit combien attendent d'être envoyés.
@@ -598,6 +603,67 @@ navigateur**. Le code écrit par l'IA tourne donc dans un cadre isolé (un
 et ne peut pas les lire. **Plein écran** garde le même cadre isolé dans une
 fenêtre neuve, pis coupe le lien vers l'onglet de Marceau. Les tests vérifient
 qu'une app qui essaie de lire ta clé se fait bloquer, pour vrai.
+
+## Les projets
+
+Un projet garde **tes conversations, tes fichiers pis tes notes au même
+endroit**, pis l'IA s'en sert quand tu travailles dedans. Pratique pour un
+devoir, un livre, un projet d'école.
+
+**L'ouvrir** : menu ☰, clique **Chat** : **→ Projets** sort en dessous.
+
+**Créer** : **+ Nouveau projet**, donne-lui un nom. Ensuite :
+
+- **Instructions pour l'IA** : ce qu'elle doit savoir (« Devoir de 5e année,
+  réponds simplement »). Clique **Enregistrer les instructions**.
+- **Conversations** : **+ Ajouter** en met une qui existe déjà.
+- **Fichiers** : **+ Fichier** copie un fichier de ton ordi dans le projet.
+- **Notes** : **+ Note** (du texte ou du code, deviné tout seul) pis **+ Lien**.
+- **Ouvrir** montre ce que t'as choisi (le code en couleurs, les liens dans ton
+  navigateur), **Retirer** l'enlève.
+
+**Travailler dans ce projet** commence une conversation dedans. En haut,
+**Projet : …** te rappelle où t'es : un clic ouvre le projet, **×** en sort.
+L'IA reçoit les instructions, le texte de tes fichiers pis tes notes (jusqu'à
+60 000 caractères avec Claude, 8 000 avec un modèle Ollama).
+
+Pour mettre des affaires dans un projet :
+
+- **Garder dans le projet**, sous chaque réponse : la réponse devient une note.
+- **Clic droit** sur du texte sélectionné → **Garder la sélection dans un
+  projet**. Les pouvoirs ✨ Magie sont toujours là, en dessous de Copier.
+- **Clic droit** sur une conversation du menu → **Mettre dans un projet** (ou
+  **Sortir du projet**).
+- **Garder dans le projet** dans le Studio, **Projet** sous une image trouvée,
+  **Projet** sur une carte du Codex.
+
+Si t'es pas dans un projet, un petit menu te demande lequel (ou d'en créer un).
+
+Tout est gardé sur ton ordi, dans `~/.local/share/ecriture/projets/` : un
+dossier par projet, avec `projet.json` pis un dossier `fichiers`. Les dossiers
+faits par l'ancien « Garder dans le projet » deviennent des projets tout seuls,
+avec leurs images.
+
+## Les images libres de droits
+
+Demande « montre-moi des images de panda roux » : Marceau cherche des images
+**libres de droits** dans [Openverse](https://openverse.org) (Flickr,
+Wikimedia, des musées…). Si Openverse répond pas, il essaie
+[Wikimedia Commons](https://commons.wikimedia.org). Tu vois 4 images, chacune
+avec :
+
+- son **titre** : un clic ouvre la page d'origine;
+- son **auteur** pis sa **licence** (CC BY, CC BY-SA…). Si tu publies une image,
+  nomme son auteur comme la licence le demande;
+- **Studio** : l'image s'ouvre dans le Studio, pour la modifier;
+- **Projet** : elle va dans un de tes projets.
+
+L'IA choisit des mots-clés en anglais : les banques d'images le comprennent
+mieux. Si elle oublie, Marceau cherche avec les mots de ta question. Sans
+Internet, il te le dit.
+
+Les projets pis les images libres sont dans Marceau sur l'ordi. Le site web les
+a pas encore.
 
 ## Le Studio : les images
 

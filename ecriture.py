@@ -257,7 +257,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 HEURES_MAJ = 6         # on revérifie les mises à jour aux 6 heures, même si l'app reste ouverte
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
@@ -343,6 +343,13 @@ def instructions_systeme(web):
         "Avant le bloc, dis en deux ou trois phrases ce que fait l'app pis comment s'en servir. "
         "Pour changer une app déjà faite, réécris-la au complet dans un nouveau bloc [APP] avec le "
         "MÊME titre : elle se met à jour toute seule dans le Studio. "
+    )
+    texte += (
+        "Autre pouvoir : l'application peut trouver des images libres de droits (Openverse, "
+        "Wikimedia Commons) pis les afficher. Quand la personne veut voir des images ou des photos "
+        "de quelque chose, écris une phrase courte pis termine par un bloc comme "
+        "[IMAGES northern lights winter] — des mots-clés simples, en anglais quand c'est possible, "
+        "parce que les banques d'images comprennent mieux l'anglais. "
     )
     texte += (
         "Quand ta réponse explique un plan d'action ou des étapes à suivre, termine-la "
@@ -860,6 +867,19 @@ MOTS_METEO = re.compile(r"m[ée]t[ée]o|quel(?:le)?s? temps|kel temps|pleuv|il p
 MOTS_PAS_LIEU = set("demain demin aujourd'hui aujourdhui auj ce cette cet soir matin midi "
                     "semaine fin weekend week-end maintenant svp stp là la le les prochain "
                     "prochaine prochains météo meteo temps quoi quel quelle stp".split())
+
+
+def colorer_tout(widget, texte, langage, taille):
+    """Colore un texte au complet (pour montrer du code gardé dans un projet)."""
+    for etiquette, (couleur, style) in COULEURS_CODE.items():
+        widget.tag_configure(etiquette, foreground=couleur,
+                             font=(FAMILLE_CODE, taille, style) if style else (FAMILLE_CODE, taille))
+    texte = texte[:200_000]   # un fichier géant reste lisible, juste pas coloré au complet
+    departs = [0] + [m.end() for m in re.finditer("\n", texte)]
+    for a, b, etiquette in jetons(texte, langage):
+        la = bisect_right(departs, a) - 1
+        lb = bisect_right(departs, b) - 1
+        widget.tag_add(etiquette, f"{1 + la}.{a - departs[la]}", f"{1 + lb}.{b - departs[lb]}")
 
 
 class PasDeLieu(Exception):
@@ -1723,6 +1743,138 @@ class StudioImage(tk.Frame):
         self.app.garder_image_projet(
             self.image_montree(),
             lambda nom: self.bouton_projet.config(text=f"Gardée dans « {nom[:18]} »"))
+
+
+# ---------- Pouvoir magique : trouver des images libres de droits pis les montrer ----------
+URL_OPENVERSE = "https://api.openverse.org/v1/images/"
+URL_COMMONS = "https://commons.wikimedia.org/w/api.php"
+# Wikimedia demande que chaque app se nomme, avec une façon de la joindre
+AGENT_WEB = f"Marceau/{VERSION} (https://github.com/alexmarceauprevost812-source/marceau-78)"
+MOTS_IMAGES = re.compile(r"(montre|affiche|trouve|cherche|veux|voir)[^.?!]{0,30}\b(image|images|photo|photos|"
+                         r"dessin|dessins|illustration|illustrations)\b", re.I)
+
+
+def extraire_galerie(texte, question):
+    """Sort le bloc [IMAGES …]. Retourne (texte sans le bloc, mots-clés ou None)."""
+    m = re.search(r"\[IMAGES?(?:\s*[:\-]?\s*([^\]\n]*))?\]", texte, re.I)
+    if m:
+        return (texte[:m.start()] + texte[m.end():]).strip(), (m.group(1) or "").strip()
+    if question and MOTS_IMAGES.search(question):   # l'IA a oublié le bloc : on cherche avec la question
+        mots = re.sub(r"\b(montre|affiche|trouve|cherche|moi|des|de|du|la|le|les|une|un|image|images|"
+                      r"photo|photos|s'il te plaît|stp|svp)\b", " ", question, flags=re.I)
+        mots = re.sub(r"[^\w\s'’]", " ", mots)    # le « - » de « Montre-moi », les « ? »…
+        return texte, " ".join(mots.split())[:60]
+    return texte, None
+
+
+def lire_web(url, entetes=None, limite=8_000_000):
+    requete = urllib.request.Request(url, headers={"User-Agent": AGENT_WEB, **(entetes or {})})
+    with urllib.request.urlopen(requete, timeout=20) as rep:
+        return rep.read(limite)
+
+
+def chercher_images(requete, nombre=4):
+    """Cherche des images libres : Openverse d'abord (Flickr, Wikimedia, musées…), Commons ensuite."""
+    if not requete.strip():
+        raise ValueError("pas de mots-clés")
+    try:
+        adresse = URL_OPENVERSE + "?" + urllib.parse.urlencode(
+            {"q": requete, "page_size": nombre * 2, "mature": "false"})
+        data = json.loads(lire_web(adresse).decode("utf-8"))
+        trouvees = []
+        for r in data.get("results", []):
+            image = r.get("thumbnail") or r.get("url")
+            if not image:
+                continue
+            licence = " ".join(x for x in (r.get("license", ""), r.get("license_version", "")) if x).upper()
+            trouvees.append({"titre": (r.get("title") or requete)[:60], "auteur": r.get("creator") or "",
+                             "licence": licence or "libre", "image": image,
+                             "page": r.get("foreign_landing_url") or r.get("url")})
+            if len(trouvees) >= nombre:
+                break
+        if trouvees:
+            return trouvees
+    except Exception:
+        pass
+    # Plan B : Wikimedia Commons
+    adresse = URL_COMMONS + "?" + urllib.parse.urlencode({
+        "action": "query", "format": "json", "generator": "search", "gsrnamespace": 6,
+        "gsrsearch": requete, "gsrlimit": nombre, "prop": "imageinfo",
+        "iiprop": "url|extmetadata", "iiurlwidth": 400})
+    data = json.loads(lire_web(adresse).decode("utf-8"))
+    trouvees = []
+    for page in (data.get("query", {}).get("pages") or {}).values():
+        infos = (page.get("imageinfo") or [{}])[0]
+        meta = infos.get("extmetadata") or {}
+        image = infos.get("thumburl") or infos.get("url")
+        if not image:
+            continue
+        auteur = re.sub(r"<[^>]+>", "", (meta.get("Artist") or {}).get("value", ""))
+        trouvees.append({"titre": page.get("title", "").replace("File:", "")[:60], "auteur": auteur[:40],
+                         "licence": (meta.get("LicenseShortName") or {}).get("value", "libre"),
+                         "image": image, "page": infos.get("descriptionurl", "")})
+    if not trouvees:
+        raise LookupError(requete)
+    return trouvees
+
+
+def telecharger_image(url):
+    return ouvrir_image(lire_web(url))
+
+
+def message_galerie(err, requete):
+    if isinstance(err, LookupError):
+        return f"J'ai rien trouvé pour « {requete} ». Essaie d'autres mots, en anglais si possible."
+    if isinstance(err, ValueError):
+        return "Dis-moi quoi chercher comme image."
+    if isinstance(err, urllib.error.URLError):
+        return "Pas de connexion Internet pour chercher des images."
+    return f"La recherche d'images a pas marché : {err}"
+
+
+class GalerieImages(tk.Frame):
+    """Les images trouvées : clique une image pour l'ouvrir dans le Studio, ou le titre pour la source."""
+    TAILLE = 150
+
+    def __init__(self, parent, app, requete, images, largeur):
+        super().__init__(parent, bg=GRIS_BOITE, highlightthickness=2, highlightbackground=ORANGE)
+        self.app = app
+        self.vignettes = []
+        tk.Frame(self, width=largeur, height=0, bg=GRIS_BOITE).pack()
+        haut = tk.Frame(self, bg=GRIS_BOITE)
+        haut.pack(fill="x", padx=12, pady=(8, 2))
+        tk.Label(haut, text="Images libres", bg=GRIS_BOITE, fg=TEXTE,
+                 font=(FAMILLE, 13, "bold")).pack(side="left")
+        tk.Label(haut, text=f"« {requete} »", bg=GRIS_BOITE, fg=couleur_texte("#2e2e2e"),
+                 font=(FAMILLE, 10)).pack(side="left", padx=8)
+        rangee = tk.Frame(self, bg=GRIS_BOITE)
+        rangee.pack(fill="x", padx=8, pady=(4, 10))
+        for trouvee in images:
+            self.ajouter(rangee, trouvee)
+
+    def ajouter(self, rangee, trouvee):
+        case = tk.Frame(rangee, bg=GRIS_BOITE)
+        case.pack(side="left", padx=6)
+        vignette = vignette_tk(trouvee["image_pil"], self.TAILLE, self.TAILLE)
+        self.vignettes.append(vignette)
+        photo = tk.Label(case, image=vignette, bg=GRIS_BOITE, cursor="hand2")
+        photo.pack()
+        photo.bind("<Button-1>", lambda e, t=trouvee: self.vers_studio(t))
+        titre = tk.Label(case, text=trouvee["titre"][:24], bg=GRIS_BOITE, fg=COULEUR_LIEN,
+                         font=(FAMILLE, 9, "underline"), cursor="hand2", wraplength=self.TAILLE)
+        titre.pack(anchor="w")
+        titre.bind("<Button-1>", lambda e, u=trouvee.get("page"): u and webbrowser.open(u))
+        credit = f"{trouvee['auteur'][:18]} · {trouvee['licence']}" if trouvee["auteur"] else trouvee["licence"]
+        tk.Label(case, text=credit, bg=GRIS_BOITE, fg=couleur_texte("#2e2e2e"), font=(FAMILLE, 8),
+                 wraplength=self.TAILLE, justify="left").pack(anchor="w")
+        boutons = tk.Frame(case, bg=GRIS_BOITE)
+        boutons.pack(anchor="w", pady=(2, 0))
+        bouton_orange(boutons, "Studio", lambda t=trouvee: self.vers_studio(t), taille=9).pack(side="left")
+        bouton_orange(boutons, "Projet", lambda t=trouvee: self.app.garder_image_projet(t["image_pil"]),
+                      taille=9).pack(side="left", padx=(4, 0))
+
+    def vers_studio(self, trouvee):
+        self.app.image_vers_studio(trouvee["image_pil"], trouvee["titre"])
 
 
 # ---------- Les pouvoirs magiques : tout roule sur ton ordi, gratuitement ----------
@@ -3847,9 +3999,11 @@ class CarteFichier(tk.Frame):
         barre = tk.Frame(self, bg=self.FOND_BARRE, cursor="hand2", height=40)
         barre.pack(fill="x")
         barre.pack_propagate(False)
-        if not supprime:     # un fichier supprimé, y'a plus rien à modifier
+        if not supprime:     # un fichier supprimé, y'a plus rien à modifier ni à garder
             bouton_orange(barre, "Modifier", lambda: ouvrir_editeur(chemin),
                           taille=9).pack(side="right", padx=8)
+            bouton_orange(barre, "Projet", lambda: app.garder_code_projet(chemin, apres),
+                          taille=9).pack(side="right")
         self.fleche = tk.Label(barre, text="▸", bg=self.FOND_BARRE, fg=ORANGE,
                                font=(FAMILLE, 13, "bold"))
         self.fleche.pack(side="left", padx=(12, 8))
@@ -4909,15 +5063,7 @@ class CodexVue(tk.Frame):
                 self.ajouter_image(chemin, piece["image"], piece.get("original"))
                 images_ajoutees.append((chemin, piece))
         explication, fichiers = extraire_fichiers(resultat["texte"] or "")
-        ecrits = []   # (chemin, avant, apres, nouveau fichier?)
-        for chemin, contenu in fichiers:
-            propre = chemin.removeprefix("./").lstrip("/")
-            nouveau = propre not in self.arbre
-            # La version d'avant : ce qu'il y a dans l'onglet ouvert, sinon ce qu'on a lu
-            # sur GitHub. Il faut la prendre AVANT d'écrire par-dessus.
-            onglet = self.trouver_onglet(propre)
-            avant = onglet.contenu() if onglet else self.cache.get(propre, "")
-            ecrits.append((self.appliquer_fichier(chemin, contenu), avant, contenu, nouveau))
+        ecrits = self.appliquer_fichiers(fichiers)   # (chemin, avant, après, nouveau fichier?)
         resume = explication or ("C'est fait, regarde les fichiers." if ecrits or images_ajoutees else
                                  "Pas de réponse cette fois-ci. Reformule ta demande.")
         tous = [c for c, _, _, _ in ecrits] + [c for c, _ in images_ajoutees]
@@ -4931,28 +5077,48 @@ class CodexVue(tk.Frame):
 
         self.app.ecrire(self.chat, resume, lambda: True, fini)
 
-    def appliquer_fichier(self, chemin, contenu):
-        """Met le fichier écrit par l'IA dans un onglet (rien part sur GitHub avant « Enregistrer »)."""
-        if chemin.startswith("./"):
-            chemin = chemin[2:]
-        chemin = chemin.lstrip("/")
-        o = self.trouver_onglet(chemin)
-        if o is not None and o.est_image:
-            self.onglets.remove(o)
-            o.cadre.destroy()
-            o = None
-        # L'éditeur ouvert : on voit le code s'écrire. Fermé : instantané, ça sert à rien d'attendre.
+    def appliquer_fichiers(self, fichiers):
+        """Met les fichiers écrits par l'IA dans les onglets (rien part sur GitHub avant « Enregistrer »).
+
+        L'éditeur ouvert : on les voit s'écrire en direct, un après l'autre. Fermé : c'est
+        instantané, ça sert à rien d'attendre. Retourne [(chemin, avant, après, nouveau?)].
+        """
         visible = self.editeur_visible()
-        if o is None:
-            o = self.creer_onglet(chemin, "" if visible else contenu,
-                                  self.arbre.get(chemin, {}).get("sha"))
-        elif not visible:
-            o.remplacer(contenu)
-        o.set_modifie(True)
-        self.activer(o, montrer=False)
-        if visible:
-            o.ecrire_code(contenu)
-        return chemin
+        prets = []
+        for chemin, contenu in fichiers:
+            chemin = chemin.removeprefix("./").lstrip("/")
+            o = self.trouver_onglet(chemin)
+            # La version d'avant : ce qu'il y a dans l'onglet ouvert, sinon ce qu'on a lu
+            # sur GitHub. Il faut la prendre AVANT d'écrire par-dessus.
+            avant = o.contenu() if o is not None and not o.est_image else self.cache.get(chemin, "")
+            if o is not None and o.est_image:   # on remplace une image par du texte
+                self.onglets.remove(o)
+                o.cadre.destroy()
+                o = None
+            if o is None:
+                o = self.creer_onglet(chemin, "" if visible else contenu,
+                                      self.arbre.get(chemin, {}).get("sha"))
+            elif not visible:
+                o.remplacer(contenu)
+            o.set_modifie(True)
+            prets.append((o, chemin, avant, contenu, chemin not in self.arbre))
+        if prets and not visible:
+            self.activer(prets[-1][0], montrer=False)
+        elif prets:
+            duree = max(0.4, DUREE_CODE / len(prets))
+
+            def suivant(i=0):
+                if i < len(prets):
+                    onglet, contenu = prets[i][0], prets[i][3]
+                    self.activer(onglet, montrer=False)
+                    onglet.ecrire_code(contenu, duree, lambda: suivant(i + 1))
+
+            suivant()
+        return [(chemin, avant, apres, neuf) for _, chemin, avant, apres, neuf in prets]
+
+    def appliquer_fichier(self, chemin, contenu):
+        """Un seul fichier (l'app du Studio qu'on met dans le Codex, par exemple)."""
+        return self.appliquer_fichiers([(chemin, contenu)])[0][0]
 
     # ----- Les images -----
     def joindre_images(self):
@@ -5369,6 +5535,516 @@ class CodexVue(tk.Frame):
         self.chat.see("end")
 
 
+# ---------- Projets : garder conversations, fichiers pis notes au même endroit ----------
+CONTEXTE_PROJET_CLAUDE = 60_000   # caractères de fichiers/notes du projet envoyés à Claude
+CONTEXTE_PROJET_OLLAMA = 8_000    # … et aux modèles gratuits
+
+
+def dossier_projet(pid):
+    return DOSSIER_PROJETS / pid
+
+
+def lire_projet(pid):
+    try:
+        return json.loads((dossier_projet(pid) / "projet.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def ecrire_projet(projet):
+    projet["modifie"] = datetime.datetime.now().isoformat(timespec="seconds")
+    dossier = dossier_projet(projet["id"])
+    dossier.mkdir(parents=True, exist_ok=True)
+    (dossier / "projet.json").write_text(json.dumps(projet, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def adopter_anciens_projets():
+    """Les dossiers faits par l'ancien « Garder dans le projet » (juste des images, sans fiche)
+    deviennent de vrais projets : leurs images restent, rangées dans « fichiers »."""
+    if not DOSSIER_PROJETS.exists():
+        return
+    for d in DOSSIER_PROJETS.iterdir():
+        if not d.is_dir() or (d / "projet.json").exists():
+            continue
+        try:
+            (d / "fichiers").mkdir(exist_ok=True)
+            fichiers = []
+            for f in sorted(d.iterdir()):
+                if f.is_file():
+                    date = datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="seconds")
+                    f.rename(d / "fichiers" / f.name)
+                    fichiers.append({"nom": f.name, "fichier": f.name, "ajoute": date})
+            ecrire_projet({"id": d.name, "nom": d.name, "description": "", "fichiers": fichiers,
+                           "notes": [], "cree": datetime.datetime.now().isoformat(timespec="seconds")})
+        except OSError:
+            continue
+
+
+def lister_projets():
+    adopter_anciens_projets()
+    if not DOSSIER_PROJETS.exists():
+        return []
+    projets = [lire_projet(d.name) for d in DOSSIER_PROJETS.iterdir() if d.is_dir()]
+    return sorted((p for p in projets if p), key=lambda p: p.get("modifie", ""), reverse=True)
+
+
+def nouveau_projet(nom):
+    maintenant = datetime.datetime.now()
+    projet = {"id": maintenant.strftime("p%Y%m%d-%H%M%S-%f"), "nom": nom, "description": "",
+              "cree": maintenant.isoformat(timespec="seconds"), "fichiers": [], "notes": []}
+    ecrire_projet(projet)
+    return projet
+
+
+def conversations_du_projet(pid):
+    return [s for s in lister_sessions() if s.get("projet") == pid]
+
+
+def mettre_session_dans_projet(sid, pid):
+    """Met une conversation dans un projet (pid=None : la sort du projet)."""
+    fichier = DOSSIER_SESSIONS / f"{sid}.json"
+    try:
+        data = json.loads(fichier.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if pid:
+        data["projet"] = pid
+    else:
+        data.pop("projet", None)
+    fichier.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def ajouter_fichier_projet(projet, source):
+    """Copie un fichier de ton ordi dans le projet."""
+    dossier = dossier_projet(projet["id"]) / "fichiers"
+    dossier.mkdir(parents=True, exist_ok=True)
+    nom = Path(source).name
+    copie = f"{datetime.datetime.now():%Y%m%d%H%M%S%f}-{nom}"
+    shutil.copy2(source, dossier / copie)
+    projet.setdefault("fichiers", []).append({"nom": nom, "fichier": copie,
+                                              "ajoute": datetime.datetime.now().isoformat(timespec="seconds")})
+    ecrire_projet(projet)
+
+
+def ajouter_image_projet(projet, image, nom):
+    dossier = dossier_projet(projet["id"]) / "fichiers"
+    dossier.mkdir(parents=True, exist_ok=True)
+    copie = f"{datetime.datetime.now():%Y%m%d%H%M%S%f}-{nom}"
+    (dossier / copie).write_bytes(octets_pour(nom, image))
+    projet.setdefault("fichiers", []).append({"nom": nom, "fichier": copie,
+                                              "ajoute": datetime.datetime.now().isoformat(timespec="seconds")})
+    ecrire_projet(projet)
+
+
+def ajouter_note_projet(projet, titre, texte, sorte="texte", url=""):
+    """Une note du projet : du texte, du code ou un lien."""
+    projet.setdefault("notes", []).append({
+        "titre": titre, "texte": texte, "sorte": sorte, "url": url,
+        "date": datetime.datetime.now().isoformat(timespec="seconds")})
+    ecrire_projet(projet)
+
+
+def sorte_du_texte(texte):
+    """Devine si ce que tu gardes est un lien, du code ou du texte."""
+    propre = texte.strip()
+    if re.fullmatch(r"(?:https?://|www\.)\S+", propre):
+        return "lien"
+    signes = ("def ", "class ", "function ", "import ", "const ", "return ", "{", "};", "</", "SELECT ")
+    if sum(1 for s in signes if s in propre) >= 2 or propre.count("\n    ") >= 2:
+        return "code"
+    return "texte"
+
+
+def contexte_projet(pid, budget):
+    """Ce que l'IA sait du projet : ses instructions, ses fichiers texte pis ses notes."""
+    projet = lire_projet(pid) if pid else None
+    if not projet:
+        return ""
+    parties = [f"Tu travailles dans le projet « {projet['nom']} »."]
+    if projet.get("description", "").strip():
+        parties.append("Instructions du projet : " + projet["description"].strip())
+    reste = budget
+    for f in projet.get("fichiers", []):
+        chemin = dossier_projet(pid) / "fichiers" / f["fichier"]
+        if est_texte(f["nom"]) and chemin.exists():
+            bloc = f"--- Fichier du projet : {f['nom']} ---\n" + chemin.read_text(encoding="utf-8", errors="replace")
+            if len(bloc) <= reste:
+                parties.append(bloc)
+                reste -= len(bloc)
+                continue
+            parties.append(f"(Le fichier {f['nom']} est trop long pour être inclus au complet.)")
+        else:
+            parties.append(f"(Le projet contient aussi le fichier {f['nom']}.)")
+    notes = [f"- {n['titre']} ({n.get('sorte', 'texte')}) : {(n.get('url') or n['texte'])[:1500]}"
+             for n in projet.get("notes", [])]
+    if notes:
+        bloc = "Notes sauvegardées dans le projet :\n" + "\n".join(notes)
+        parties.append(bloc[:max(reste, 500)])
+    return "\n\n".join(parties)
+
+
+def fenetre(app, titre, largeur=700, hauteur=520):
+    """Une petite fenêtre au look de l'app."""
+    f = tk.Toplevel(app, bg=GRIS_FOND)
+    f.title(titre)
+    f.geometry(f"{largeur}x{hauteur}")
+    f.transient(app)
+    return f
+
+
+def editeur_note(app, titre, texte, enregistrer):
+    """Fenêtre pour écrire ou modifier une note du projet."""
+    f = fenetre(app, "Note du projet", 640, 480)
+    tk.Label(f, text="Titre", bg=GRIS_FOND, fg=TEXTE, font=(FAMILLE, 11, "bold"), anchor="w").pack(
+        fill="x", padx=16, pady=(14, 2))
+    champ = tk.Entry(f, bg=GRIS_ZONE, fg=TEXTE, insertbackground=TEXTE, relief="flat", bd=0,
+                     font=(FAMILLE, 12), highlightthickness=2, highlightbackground=GRIS_BORD,
+                     highlightcolor=ORANGE)
+    champ.pack(fill="x", padx=16, ipady=5)
+    champ.insert(0, titre)
+    boutons = tk.Frame(f, bg=GRIS_FOND)
+    boutons.pack(side="bottom", fill="x", padx=16, pady=12)
+    zone = tk.Text(f, **style_zone(12))
+    zone.pack(fill="both", expand=True, padx=16, pady=(10, 0))
+    zone.insert("1.0", texte)
+
+    def ok():
+        enregistrer(champ.get().strip() or "Sans titre", zone.get("1.0", "end-1c"))
+        f.destroy()
+
+    bouton_orange(boutons, "Enregistrer", ok).pack(side="right")
+    bouton_orange(boutons, "Annuler", f.destroy).pack(side="right", padx=(0, 8))
+    champ.focus_set()
+    return f
+
+
+def deviner_langage(titre, texte):
+    """Le langage d'un bout de code : par son nom (app.py), sinon par ce qu'il y a dedans."""
+    langage = langage_de(titre)
+    if langage != "generique":
+        return langage
+    debut = texte[:3000]
+    if re.search(r"^\s*(def|class|import|from)\s", debut, re.M):
+        return "python"
+    if re.search(r"<(!doctype|html|head|body|div|p|span)\b", debut, re.I):
+        return "html"
+    if re.search(r"\b(function|const|let|var)\b|=>", debut):
+        return "js"
+    if re.search(r"^\s*[.#]?[\w-]+\s*\{[^}]*:[^}]*\}", debut, re.M):
+        return "css"
+    return "generique"
+
+
+def voir_code(app, titre, code):
+    """Montre un bout de code gardé dans un projet, avec les couleurs."""
+    f = fenetre(app, titre, 760, 520)
+    zone = tk.Text(f, wrap="none", bg=CODE_FOND, fg=CODE_TEXTE, font=POLICE_CODE, relief="flat",
+                   bd=0, padx=10, pady=8, highlightthickness=0)
+    zone.pack(fill="both", expand=True)
+    zone.insert("1.0", code)
+    colorer_tout(zone, code, deviner_langage(titre, code), POLICE_CODE[1])
+    bas = tk.Frame(f, bg=GRIS_FOND)
+    bas.pack(fill="x", padx=12, pady=8)
+    bouton_orange(bas, "Copier", lambda: (app.clipboard_clear(), app.clipboard_append(code)),
+                  taille=9).pack(side="right")
+    zone.config(state="disabled")
+    return f
+
+
+def voir_fichier(app, nom, chemin):
+    """Montre un fichier du projet (texte coloré ou image)."""
+    f = fenetre(app, nom, 760, 560)
+    if Path(nom).suffix.lower() in EXT_IMAGES and Image is not None:
+        try:
+            f.image_tk = vignette_tk(ouvrir_image(str(chemin)), 720, 500)
+            tk.Label(f, image=f.image_tk, bg=GRIS_FOND).pack(expand=True)
+            return f
+        except Exception:
+            pass
+    zone = tk.Text(f, wrap="none", bg=CODE_FOND, fg=CODE_TEXTE, font=POLICE_CODE, relief="flat",
+                   bd=0, padx=10, pady=8, highlightthickness=0)
+    zone.pack(fill="both", expand=True)
+    try:
+        texte = Path(chemin).read_text(encoding="utf-8")
+    except Exception:
+        texte = "(Ce fichier n'est pas du texte, pis ce n'est pas une image que je peux montrer.)"
+    zone.insert("1.0", texte)
+    colorer_tout(zone, texte, langage_de(nom), POLICE_CODE[1])
+    zone.config(state="disabled")
+    return f
+
+
+class VueProjets(tk.Frame):
+    """Tes projets : chaque projet garde ses conversations, ses fichiers pis ses notes."""
+    L_LISTE = 260
+
+    def __init__(self, app):
+        super().__init__(app, bg=GRIS_FOND)
+        self.app = app
+        self.projet = None
+        self.ids = []
+        self.conversations = []
+        barre = tk.Frame(self, bg=GRIS_FOND, height=64)
+        barre.pack(side="top", fill="x")
+        barre.pack_propagate(False)
+        tk.Label(barre, text="Projets", bg=GRIS_FOND, fg=TEXTE,
+                 font=(FAMILLE, 16, "bold")).pack(side="left", padx=(74, 16))
+        bouton_orange(barre, "Fermer", app.aller_chat).pack(side="right", padx=18, pady=13)
+        corps = tk.Frame(self, bg=GRIS_FOND)
+        corps.pack(fill="both", expand=True)
+
+        gauche = tk.Frame(corps, bg=GRIS_MENU, width=self.L_LISTE)
+        gauche.pack(side="left", fill="y")
+        gauche.pack_propagate(False)
+        bouton_orange(gauche, "+ Nouveau projet", self.creer).pack(fill="x", padx=12, pady=(12, 8))
+        self.liste = tk.Listbox(gauche, bg=GRIS_MENU, fg=TEXTE, selectbackground=ORANGE, selectforeground=NOIR,
+                                font=(FAMILLE, 11), relief="flat", bd=0, highlightthickness=0,
+                                activestyle="none")
+        self.liste.pack(fill="both", expand=True, padx=(8, 10), pady=(0, 10))
+        self.liste.bind("<<ListboxSelect>>", self.sur_choix)
+
+        self.droite = tk.Frame(corps, bg=GRIS_FOND)
+        self.droite.pack(side="left", fill="both", expand=True)
+        self.vide = tk.Label(self.droite, bg=GRIS_FOND, fg=TEXTE, font=(FAMILLE, 13), justify="center",
+                             text="Un projet garde tes conversations, tes fichiers pis tes notes\n"
+                                  "au même endroit. L'IA s'en sert quand tu travailles dedans.\n\n"
+                                  "Clique « + Nouveau projet » pour commencer.")
+        self.detail = tk.Frame(self.droite, bg=GRIS_FOND)
+        self.construire_detail()
+        self.rafraichir()
+
+    # ----- Construction -----
+    def construire_detail(self):
+        d = self.detail
+        haut = tk.Frame(d, bg=GRIS_FOND)
+        haut.pack(fill="x", padx=18, pady=(14, 8))
+        self.titre = tk.Label(haut, bg=GRIS_FOND, fg=TEXTE, font=(FAMILLE, 18, "bold"), anchor="w")
+        self.titre.pack(side="left")
+        bouton_orange(haut, "Supprimer", self.supprimer, taille=9).pack(side="right")
+        bouton_orange(haut, "Renommer", self.renommer, taille=9).pack(side="right", padx=(0, 8))
+        bouton_orange(haut, "Travailler dans ce projet", self.travailler).pack(side="right", padx=(0, 12))
+
+        tk.Label(d, text="Instructions pour l'IA (ce qu'elle doit savoir sur ce projet)", bg=GRIS_FOND,
+                 fg=TEXTE, font=(FAMILLE, 11, "bold"), anchor="w").pack(fill="x", padx=18)
+        self.instructions = tk.Text(d, height=4, **style_zone(12))
+        self.instructions.pack(fill="x", padx=18, pady=(4, 6))
+        rang = tk.Frame(d, bg=GRIS_FOND)
+        rang.pack(fill="x", padx=18)
+        bouton_orange(rang, "Enregistrer les instructions", self.enregistrer_instructions,
+                      taille=9).pack(side="left")
+        self.etat_instructions = tk.Label(rang, bg=GRIS_FOND, fg=couleur_texte("#2e2e2e"), font=(FAMILLE, 9))
+        self.etat_instructions.pack(side="left", padx=10)
+
+        colonnes = tk.Frame(d, bg=GRIS_FOND)
+        colonnes.pack(fill="both", expand=True, padx=12, pady=(12, 14))
+        self.listes, self.titres_colonnes = {}, {}
+        for i, (cle, titre, ajouter) in enumerate((
+                ("conversations", "Conversations", ("+ Ajouter", self.ajouter_conversation)),
+                ("fichiers", "Fichiers", ("+ Fichier", self.ajouter_fichiers)),
+                ("notes", "Notes", ("+ Note", self.ajouter_note)))):
+            colonnes.grid_columnconfigure(i, weight=1, uniform="col")
+            col = tk.Frame(colonnes, bg=GRIS_MENU)
+            col.grid(row=0, column=i, sticky="nsew", padx=6)
+            tete = tk.Frame(col, bg=GRIS_MENU)
+            tete.pack(fill="x", padx=10, pady=(8, 4))
+            self.titres_colonnes[cle] = tk.Label(tete, text=titre, bg=GRIS_MENU, fg=TEXTE,
+                                                 font=(FAMILLE, 11, "bold"))
+            self.titres_colonnes[cle].pack(side="left")
+            bouton_orange(tete, ajouter[0], ajouter[1], taille=9).pack(side="right")
+            if cle == "notes":   # les liens vont avec les notes
+                bouton_orange(tete, "+ Lien", self.ajouter_lien, taille=9).pack(side="right", padx=(0, 5))
+            liste = tk.Listbox(col, bg=GRIS_MENU, fg=TEXTE, selectbackground=ORANGE, selectforeground=NOIR,
+                               font=(FAMILLE, 10), relief="flat", bd=0, highlightthickness=0,
+                               activestyle="none")
+            liste.pack(fill="both", expand=True, padx=6)
+            liste.bind("<Double-1>", lambda e, c=cle: self.ouvrir(c))
+            bas = tk.Frame(col, bg=GRIS_MENU)
+            bas.pack(fill="x", padx=10, pady=8)
+            bouton_orange(bas, "Ouvrir", lambda c=cle: self.ouvrir(c), taille=9).pack(side="left")
+            bouton_orange(bas, "Retirer", lambda c=cle: self.retirer(c), taille=9).pack(side="left", padx=(8, 0))
+            self.listes[cle] = liste
+        colonnes.grid_rowconfigure(0, weight=1)
+
+    # ----- Liste des projets -----
+    def rafraichir(self, choisir=None):
+        projets = lister_projets()
+        self.liste.delete(0, "end")
+        self.ids = [p["id"] for p in projets]
+        for p in projets:
+            actif = "  (actif)" if p["id"] == self.app.projet_actif else ""
+            self.liste.insert("end", f"  {p['nom']}{actif}")
+        cible = choisir or (self.projet["id"] if self.projet else None) or self.app.projet_actif
+        if cible in self.ids:
+            self.liste.selection_clear(0, "end")
+            self.liste.selection_set(self.ids.index(cible))
+            self.montrer(cible)
+        else:
+            self.projet = None
+            self.detail.pack_forget()
+            self.vide.pack(expand=True)
+
+    def sur_choix(self, event=None):
+        choix = self.liste.curselection()
+        if choix:
+            self.montrer(self.ids[choix[0]])
+
+    def montrer(self, pid):
+        self.projet = lire_projet(pid)
+        if not self.projet:
+            return
+        self.vide.pack_forget()
+        self.detail.pack(fill="both", expand=True)
+        self.titre.config(text=self.projet["nom"])
+        self.instructions.delete("1.0", "end")
+        self.instructions.insert("1.0", self.projet.get("description", ""))
+        self.etat_instructions.config(text="")
+        self.remplir()
+
+    def remplir(self):
+        p = self.projet
+        self.conversations = conversations_du_projet(p["id"])
+        contenus = {"conversations": [s.get("titre", "Sans titre") for s in self.conversations],
+                    "fichiers": [f["nom"] for f in p.get("fichiers", [])],
+                    "notes": [("" if n.get("sorte", "texte") == "texte" else f"[{n['sorte']}] ") + n["titre"]
+                              for n in p.get("notes", [])]}
+        noms = {"conversations": "Conversations", "fichiers": "Fichiers", "notes": "Notes"}
+        for cle, elements in contenus.items():
+            liste = self.listes[cle]
+            liste.delete(0, "end")
+            for e in elements:
+                liste.insert("end", "  " + e)
+            self.titres_colonnes[cle].config(text=f"{noms[cle]} ({len(elements)})")
+
+    def choisi(self, cle):
+        choix = self.listes[cle].curselection()
+        return choix[0] if choix else None
+
+    # ----- Actions -----
+    def creer(self):
+        nom = simpledialog.askstring("Nouveau projet", "Nom du projet :", parent=self)
+        if nom and nom.strip():
+            projet = nouveau_projet(nom.strip())
+            self.rafraichir(choisir=projet["id"])
+            self.instructions.focus_set()
+
+    def renommer(self):
+        nom = simpledialog.askstring("Renommer", "Nouveau nom du projet :",
+                                     initialvalue=self.projet["nom"], parent=self)
+        if nom and nom.strip():
+            self.projet["nom"] = nom.strip()
+            ecrire_projet(self.projet)
+            self.rafraichir()
+            self.app.maj_puce_projet()
+
+    def supprimer(self):
+        if not messagebox.askyesno("Supprimer le projet",
+                                   f"Supprimer le projet « {self.projet['nom']} », ses fichiers pis "
+                                   "ses notes?\nLes conversations restent dans le menu.", parent=self):
+            return
+        pid = self.projet["id"]
+        for s in conversations_du_projet(pid):
+            mettre_session_dans_projet(s["id"], None)
+        shutil.rmtree(dossier_projet(pid), ignore_errors=True)
+        if self.app.projet_actif == pid:
+            self.app.projet_actif = None
+            self.app.maj_puce_projet()
+        self.projet = None
+        self.rafraichir()
+
+    def travailler(self):
+        self.app.travailler_dans_projet(self.projet["id"])
+
+    def enregistrer_instructions(self):
+        self.projet["description"] = self.instructions.get("1.0", "end-1c").strip()
+        ecrire_projet(self.projet)
+        self.etat_instructions.config(text="Instructions enregistrées.")
+
+    def ajouter_conversation(self):
+        dedans = {s["id"] for s in self.conversations}
+        autres = [s for s in lister_sessions() if s["id"] not in dedans]
+        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
+                       activeforeground=NOIR, font=(FAMILLE, 11))
+        if not autres:
+            menu.add_command(label="Aucune autre conversation", state="disabled")
+        for s in autres[:30]:
+            menu.add_command(label=s.get("titre", "Sans titre"),
+                             command=lambda sid=s["id"]: self.mettre_conversation(sid))
+        self.menu_conversations = menu      # gardé pour les essais
+        menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+
+    def mettre_conversation(self, sid):
+        mettre_session_dans_projet(sid, self.projet["id"])
+        if sid == self.app.session_id:
+            self.app.projet_actif = self.projet["id"]
+            self.app.maj_puce_projet()
+        self.remplir()
+
+    def ajouter_fichiers(self):
+        fichiers = filedialog.askopenfilenames(title="Fichiers à mettre dans le projet", parent=self)
+        for f in fichiers:
+            ajouter_fichier_projet(self.projet, f)
+        self.remplir()
+
+    def ajouter_note(self):
+        def garder(titre, texte):
+            ajouter_note_projet(self.projet, titre, texte, sorte_du_texte(texte))
+            self.remplir()
+        return editeur_note(self.app, "", "", garder)
+
+    def ajouter_lien(self):
+        url = simpledialog.askstring("Nouveau lien", "Adresse du lien (https://…) :", parent=self)
+        if not url or not url.strip():
+            return
+        url = url.strip()
+        defaut = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
+        titre = simpledialog.askstring("Nouveau lien", "Nom du lien :", initialvalue=defaut, parent=self)
+        ajouter_note_projet(self.projet, (titre or defaut).strip(), url, "lien", url)
+        self.remplir()
+
+    def ouvrir(self, cle):
+        i = self.choisi(cle)
+        if i is None:
+            return None
+        if cle == "conversations":
+            self.app.ouvrir_session(self.conversations[i]["id"])
+            return None
+        if cle == "fichiers":
+            f = self.projet["fichiers"][i]
+            return voir_fichier(self.app, f["nom"], dossier_projet(self.projet["id"]) / "fichiers" / f["fichier"])
+        note = self.projet["notes"][i]
+        sorte = note.get("sorte", "texte")
+        if sorte == "lien":
+            webbrowser.open(note.get("url") or note["texte"].strip())
+            return None
+        if sorte == "code":
+            return voir_code(self.app, note["titre"], note["texte"])
+
+        def garder(titre, texte):
+            note.update(titre=titre, texte=texte, sorte=sorte_du_texte(texte))
+            ecrire_projet(self.projet)
+            self.remplir()
+        return editeur_note(self.app, note["titre"], note["texte"], garder)
+
+    def retirer(self, cle):
+        i = self.choisi(cle)
+        if i is None:
+            return
+        if cle == "conversations":
+            s = self.conversations[i]
+            mettre_session_dans_projet(s["id"], None)
+            if s["id"] == self.app.session_id:
+                self.app.projet_actif = None
+                self.app.maj_puce_projet()
+        elif cle == "fichiers":
+            f = self.projet["fichiers"].pop(i)
+            (dossier_projet(self.projet["id"]) / "fichiers" / f["fichier"]).unlink(missing_ok=True)
+            ecrire_projet(self.projet)
+        else:
+            self.projet["notes"].pop(i)
+            ecrire_projet(self.projet)
+        self.remplir()
+
+
 # ---------- L'application ----------
 class AppEcriture(tk.Tk):
     def __init__(self):
@@ -5398,6 +6074,9 @@ class AppEcriture(tk.Tk):
         self.images_tk = []          # vignettes affichées (Tkinter les efface si on les garde pas)
         self.image_courante = None   # la dernière image de la conversation (pour le Studio)
         self.image_courante_chemin = None
+        self.projet_actif = None     # le projet dans lequel tu travailles (ou None)
+        self.vue_projets = None
+        self.projets_sessions = {}   # conversation → son projet (pour le menu du clic droit)
         self.occupe_magie = False    # un pouvoir magique est en train de travailler
         self.boutons_voix = []       # le bouton 🔊 du chat pis celui du Codex
         self.voix_active = lire_reglages().get("voix", True)   # l'IA lit ses réponses à voix haute
@@ -5467,6 +6146,16 @@ class AppEcriture(tk.Tk):
         self.creer_bouton_voix(self.options).pack(side="left", padx=(8, 0))
         self.cadre_pieces = tk.Frame(self.options, bg=GRIS_FOND)
         self.cadre_pieces.pack(side="left")
+
+        # --- « Projet : … » en haut, quand tu travailles dans un projet ---
+        self.puce_projet = tk.Frame(self, bg=GRIS_INACTIF)
+        self.puce_nom = tk.Button(self.puce_projet, command=lambda: self.ouvrir_projets(self.projet_actif),
+                                  bg=GRIS_INACTIF, fg=TEXTE, activebackground=ORANGE, relief="flat", bd=0,
+                                  highlightthickness=0, font=(FAMILLE, 10, "bold"), padx=12, cursor="hand2")
+        self.puce_nom.pack(side="left", fill="y")
+        tk.Button(self.puce_projet, text="×", command=self.quitter_projet, bg=GRIS_INACTIF, fg=TEXTE,
+                  activebackground=ORANGE, relief="flat", bd=0, highlightthickness=0,
+                  font=(FAMILLE, 12, "bold"), padx=8, cursor="hand2").pack(side="left", fill="y")
 
         # --- Menu de gauche + bouton ☰ (toujours par-dessus le reste) ---
         self.construire_menu_lateral()
@@ -5792,8 +6481,15 @@ class AppEcriture(tk.Tk):
     def construire_page_principale(self, p):
         tk.Frame(p, bg=GRIS_MENU, height=70).pack(fill="x")   # la place du bouton ☰
         # Les trois modes, de la même grosseur, en haut : on les voit d'un coup d'œil.
-        self.nav_chat = self.bouton_nav(p, "\u270e", "Chat", self.aller_chat)
+        self.nav_chat = self.bouton_nav(p, "\u270e", "Chat", self.cliquer_chat)
         self.nav_chat.pack(fill="x", padx=14, pady=(0, 8))
+        self.sous_menu = tk.Frame(p, bg=GRIS_MENU, height=1)   # « → Projets » sort d'ici
+        self.sous_menu.pack(fill="x")
+        self.sous_menu.pack_propagate(False)
+        self.nav_projets = self.bouton_nav(self.sous_menu, "\u2192", "Projets", self.ouvrir_projets)
+        self.nav_projets.config(font=(FAMILLE, 11, "bold"), pady=8)
+        self.nav_projets.pack(fill="x", padx=(34, 14), pady=(0, 8))
+        self.sous_ouvert = False
         self.nav_codex = self.bouton_nav(p, "\u25a4", "Codex", self.ouvrir_codex)
         self.nav_codex.pack(fill="x", padx=14, pady=(0, 8))
         self.nav_param = self.bouton_nav(p, "\u2699", "Paramètres",
@@ -6067,15 +6763,32 @@ class AppEcriture(tk.Tk):
                     apres, etapes=16)
 
     def maj_navigation(self):
-        codex = self.codex_visible()
-        for bouton, fond in ((self.nav_chat, GRIS_INACTIF if codex else ORANGE),
-                             (self.nav_codex, ORANGE if codex else GRIS_INACTIF)):
+        vue = "codex" if self.codex_visible() else "projets" if self.projets_visible() else "chat"
+        for nom, bouton in (("chat", self.nav_chat), ("projets", self.nav_projets),
+                            ("codex", self.nav_codex)):
+            fond = ORANGE if nom == vue else GRIS_INACTIF
             bouton.config(bg=fond, fg=texte_sur(fond))
 
     def aller_chat(self):
+        self.fermer_projets()
         self.fermer_codex()
         self.fermer_menu()
         self.saisie.focus_set()
+
+    def cliquer_chat(self):
+        """Clic sur « Chat » : retour à la conversation, pis « → Projets » apparaît en glissant."""
+        self.fermer_projets()
+        self.fermer_codex()
+        self.saisie.focus_set()
+        self.basculer_sous_menu()
+
+    def basculer_sous_menu(self, ouvrir=None):
+        self.sous_ouvert = (not self.sous_ouvert) if ouvrir is None else ouvrir
+        self.update_idletasks()
+        hauteur = self.nav_projets.winfo_reqheight() + 8
+        self.animer("sous_menu", max(1, self.sous_menu.winfo_height()),
+                    hauteur if self.sous_ouvert else 1,
+                    lambda v: self.sous_menu.config(height=max(1, int(v))), etapes=14, douce=True)
 
     def fermer_menu(self):
         if self.menu_ouvert:
@@ -6091,6 +6804,7 @@ class AppEcriture(tk.Tk):
             liste.itemconfig(0, fg=couleur_texte("#3a3a3a"))
             self.ids_sessions.append(None)
             return
+        self.projets_sessions = {s.get("id"): s.get("projet") for s in sessions}
         for i, s in enumerate(sessions):
             titre = s.get("titre", "Sans titre")
             liste.insert("end", "  " + (titre if len(titre) <= 28 else titre[:27].rstrip() + "…"))
@@ -6116,9 +6830,21 @@ class AppEcriture(tk.Tk):
         if i < 0 or i >= len(self.ids_sessions) or self.ids_sessions[i] is None:
             return
         sid = self.ids_sessions[i]
-        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
-                       activeforeground=NOIR, font=(FAMILLE, 11))
+        style = dict(tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE, activeforeground=NOIR,
+                     font=(FAMILLE, 11))
+        menu = tk.Menu(self, **style)
+        sous = tk.Menu(menu, **style)
+        for projet in lister_projets()[:20]:
+            sous.add_command(label=projet["nom"], command=lambda p=projet["id"]: self.session_vers_projet(sid, p))
+        sous.add_separator()
+        sous.add_command(label="Nouveau projet…", command=lambda: self.creer_projet_puis(
+            lambda p: self.session_vers_projet(sid, p["id"])))
+        menu.add_cascade(label="Mettre dans un projet", menu=sous)
+        if self.projets_sessions.get(sid):
+            menu.add_command(label="Sortir du projet", command=lambda: self.session_vers_projet(sid, None))
+        menu.add_separator()
         menu.add_command(label="Supprimer la conversation", command=lambda: self.supprimer_session(sid))
+        self.menu_conversation = menu        # gardé pour les essais
         menu.tk_popup(event.x_root, event.y_root)
 
     def supprimer_session(self, sid):
@@ -6144,6 +6870,7 @@ class AppEcriture(tk.Tk):
         (DOSSIER_SESSIONS / f"{self.session_id}.json").write_text(json.dumps({
             "id": self.session_id, "titre": titre, "cree": self.session_cree,
             "modifie": maintenant.isoformat(timespec="seconds"), "messages": self.messages,
+            **({"projet": self.projet_actif} if self.projet_actif else {}),
         }, ensure_ascii=False, indent=1), encoding="utf-8")
         if self.menu_ouvert:
             self.rafraichir_sessions()
@@ -6154,9 +6881,12 @@ class AppEcriture(tk.Tk):
         except Exception:
             messagebox.showerror("Conversation", "Impossible d'ouvrir cette conversation.")
             return
+        self.fermer_projets()
         self.fermer_codex()
         self.vider_conversation()
         self.session_id, self.session_cree = data["id"], data.get("cree")
+        self.projet_actif = data.get("projet") if lire_projet(data.get("projet") or "") else None
+        self.maj_puce_projet()
         self.messages = data.get("messages", [])
         if self.premiere_ligne:
             self.annuler_animation("descente")
@@ -6187,6 +6917,8 @@ class AppEcriture(tk.Tk):
                                                [tuple(s) for s in m.get("sources") or []])
                 if m.get("meteo") is not None:
                     self.ajouter_meteo(m["meteo"])   # la météo d'astheure, en direct
+                if m.get("galerie") is not None:
+                    self.ajouter_galerie(m["galerie"])
                 if m.get("studio") and Image is not None:
                     self.remontrer_studio(m["studio"])
                 if m.get("app"):
@@ -6237,6 +6969,7 @@ class AppEcriture(tk.Tk):
 
     # ---------- Codex ----------
     def ouvrir_codex(self):
+        self.fermer_projets()
         if self.codex is None:
             self.codex = CodexVue(self)
         self.codex.place(x=0, y=0, relwidth=1, relheight=1)
@@ -6334,8 +7067,8 @@ class AppEcriture(tk.Tk):
         self.question_en_cours = texte
         self.montrer_attente(nom_court(moteur))
         self.occupe = True
-        threading.Thread(target=self.travail, args=(moteur, cle, self.historique_api(), self.generation),
-                         daemon=True).start()
+        threading.Thread(target=self.travail, args=(moteur, cle, self.historique_api(), self.generation,
+                                                    self.projet_actif), daemon=True).start()
         self.after(100, self.verifier_resultat)
 
         if self.premiere_ligne:
@@ -6346,7 +7079,7 @@ class AppEcriture(tk.Tk):
         self.document.see("end")
         return "break"
 
-    def travail(self, moteur, cle, historique, generation):
+    def travail(self, moteur, cle, historique, generation, projet=None):
         # Roule dans un fil à part pour que la fenêtre gèle pas pendant que l'IA réfléchit
         type_moteur, modele = moteur
         try:
@@ -6358,11 +7091,15 @@ class AppEcriture(tk.Tk):
                             "les modifier dans le Studio. Pour qu'il les voie : ollama pull gemma3, "
                             "ou choisis Claude.")
                 historique = preparer_historique(historique, voit)
+            # Le projet : ses instructions, ses fichiers pis ses notes vont avec les consignes
+            extra = contexte_projet(projet, CONTEXTE_PROJET_CLAUDE if type_moteur == "claude"
+                                    else CONTEXTE_PROJET_OLLAMA) if projet else ""
+            systeme = instructions_systeme(web=type_moteur == "claude") + ("\n\n" + extra if extra else "")
             if type_moteur == "claude":
-                texte, sources = appeler_claude(cle, historique, instructions_systeme(web=True),
+                texte, sources = appeler_claude(cle, historique, systeme,
                                                 max_tokens=16000, timeout=600, modele=modele)
             else:
-                texte, sources = appeler_ollama(modele, historique, instructions_systeme(web=False))
+                texte, sources = appeler_ollama(modele, historique, systeme)
             self.resultats.put((generation, "ok", texte, sources, avis))
         except Exception as err:
             self.resultats.put((generation, "erreur", message_erreur(err, type_moteur, modele), [], ""))
@@ -6390,14 +7127,19 @@ class AppEcriture(tk.Tk):
             texte, etapes = extraire_plan(texte, self.question_en_cours)
             texte, lieu_meteo = extraire_meteo(texte, self.question_en_cours)
             texte, operations = extraire_studio(texte)
+            avait_image = bool(self.messages and self.messages[-1].get("images"))
+            # Sans bloc [IMAGES], on devine avec la question… sauf pour une app ou une image à changer
+            texte, recherche_images = extraire_galerie(
+                texte, "" if app or operations or avait_image else self.question_en_cours)
             texte = liens_markdown_en_texte(texte) or (
                 "Voilà ton app :" if app else
                 "Voici la météo :" if lieu_meteo is not None else "Voici le plan :" if etapes else
                 "Voilà ton image :" if operations else
+                "Voici des images :" if recherche_images is not None else
                 "Pas de réponse cette fois-ci. Reformule ta question.")
-            avait_image = bool(self.messages and self.messages[-1].get("images"))
             reponse = {"role": "assistant", "content": texte, "etapes": etapes,
-                       "sources": [list(s) for s in sources], "meteo": lieu_meteo}
+                       "sources": [list(s) for s in sources], "meteo": lieu_meteo,
+                       "galerie": recherche_images}
             self.messages.append(reponse)
             self.sauver_session()
 
@@ -6408,10 +7150,14 @@ class AppEcriture(tk.Tk):
                     self.ajouter_meteo(lieu_meteo)
                 if avis:
                     self.document.insert("end", avis + "\n", "sources")
+                if recherche_images is not None:
+                    self.ajouter_galerie(recherche_images)
                 if operations or avait_image:
                     self.ajouter_studio(operations, reponse)
                 if app:
                     self.ajouter_app(app, reponse)
+                if self.projet_actif:
+                    self.lien_garder(self.question_en_cours, texte)
                 self.fin_reponse(index)
                 self.dire_a_voix_haute(texte)
 
@@ -6689,11 +7435,25 @@ class AppEcriture(tk.Tk):
             self.descendre()
 
     def clic_droit_document(self, event):
-        """Clic droit sur le texte : si rien n'est sélectionné, on sélectionne le mot sous la souris."""
+        """Clic droit sur le texte : copier, garder dans un projet, pis les pouvoirs magiques."""
         if not self.document.tag_ranges("sel"):
             self.document.mark_set("insert", f"@{event.x},{event.y}")
         self.document.focus_set()
-        return self.ouvrir_menu_magie(event)
+        try:
+            selection = self.document.get("sel.first", "sel.last")
+        except tk.TclError:
+            selection = ""
+        etat = "normal" if selection.strip() else "disabled"
+        self.montrer_document()
+        menu = self.construire_menu_magie()
+        menu.insert_command(0, label="Copier", state=etat,
+                            command=lambda: (self.clipboard_clear(), self.clipboard_append(selection)))
+        menu.insert_command(1, label="Garder la sélection dans un projet", state=etat,
+                            command=lambda: self.garder_selection_projet(selection))
+        menu.insert_separator(2)
+        self.menu_clic_droit = menu          # gardé pour les essais
+        menu.tk_popup(event.x_root, event.y_root)
+        return "break"
 
     def texte_choisi(self):
         """Ce sur quoi le pouvoir travaille : ta sélection, ou tout le texte si t'as rien choisi.
@@ -7074,29 +7834,179 @@ class AppEcriture(tk.Tk):
         if chemin and chemin.strip():
             self.codex.ajouter_image(chemin.strip().lstrip("/"), image, montrer=True)
 
-    def garder_image_projet(self, image, rappel=None):
-        """« Garder dans le projet » : range l'image dans un dossier de projet, sur ton ordi."""
-        reglages = lire_reglages()
-        nom = simpledialog.askstring(
-            "Garder dans le projet", "Nom du projet (c'est un dossier sur ton ordi) :",
-            initialvalue=reglages.get("projet", "Mon projet"), parent=self)
-        if not nom or not nom.strip():
+    # ---------- Projets ----------
+    def ouvrir_projets(self, pid=None):
+        self.basculer_sous_menu(True)
+        if self.vue_projets is None:
+            self.vue_projets = VueProjets(self)
+        self.fermer_codex()
+        self.vue_projets.place(x=0, y=0, relwidth=1, relheight=1)
+        self.vue_projets.lift()
+        self.menu_lateral.lift()
+        self.bouton_menu.lift()
+        self.vue_projets.rafraichir(choisir=pid)
+        self.maj_navigation()
+        self.fermer_menu()
+
+    def fermer_projets(self):
+        if self.vue_projets is not None:
+            self.vue_projets.place_forget()
+        if hasattr(self, "nav_projets"):
+            self.maj_navigation()
+
+    def projets_visible(self):
+        return self.vue_projets is not None and bool(self.vue_projets.winfo_manager())
+
+    def maj_puce_projet(self):
+        projet = lire_projet(self.projet_actif) if self.projet_actif else None
+        if not projet:
+            self.projet_actif = None
+            self.puce_projet.place_forget()
             return
-        nom = nom.strip()
-        dossier = DOSSIER_PROJETS / (re.sub(r'[<>:"/\\|?*]', "-", nom)[:60] or "projet")
-        try:
-            dossier.mkdir(parents=True, exist_ok=True)
-            # microsecondes : deux images gardées dans la même seconde s'écraseraient
-            fichier = dossier / f"image-{datetime.datetime.now():%Y%m%d-%H%M%S-%f}.png"
-            fichier.write_bytes(octets_pour(fichier.name, image))
-        except OSError as e:
-            messagebox.showerror("Garder dans le projet", f"Ça n'a pas marché : {e}", parent=self)
+        nom = projet["nom"] if len(projet["nom"]) <= 24 else projet["nom"][:23] + "…"
+        self.puce_nom.config(text=f"Projet : {nom}")
+        self.puce_projet.place(x=70, y=14, height=38)
+
+    def travailler_dans_projet(self, pid):
+        """Nouvelle conversation dans ce projet : l'IA connaît ses instructions, fichiers pis notes."""
+        self.projet_actif = pid
+        self.nouveau()
+        self.maj_puce_projet()
+
+    def quitter_projet(self):
+        self.projet_actif = None
+        self.nouveau()
+        self.maj_puce_projet()
+
+    def session_vers_projet(self, sid, pid):
+        mettre_session_dans_projet(sid, pid)
+        if sid == self.session_id:
+            self.projet_actif = pid
+            self.maj_puce_projet()
+        self.rafraichir_sessions()
+        if self.projets_visible() and self.vue_projets.projet:
+            self.vue_projets.remplir()
+
+    def creer_projet_puis(self, action):
+        nom = simpledialog.askstring("Nouveau projet", "Nom du projet :", parent=self)
+        if nom and nom.strip():
+            action(nouveau_projet(nom.strip()))
+
+    def choisir_projet(self, action):
+        """Le projet actif s'il y en a un, sinon un petit menu pour en choisir (ou en créer) un."""
+        projet = lire_projet(self.projet_actif) if self.projet_actif else None
+        if projet:
+            action(projet)
             return
-        reglages["projet"] = nom
-        enregistrer_reglages(reglages)
-        self.dire_magie(f"Image gardée dans « {nom} » : {fichier}")
-        if rappel:
-            rappel(nom)
+        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
+                       activeforeground=NOIR, font=(FAMILLE, 11))
+        projets = lister_projets()
+        for p in projets[:20]:
+            menu.add_command(label=p["nom"], command=lambda p=p: action(p))
+        if projets:
+            menu.add_separator()
+        menu.add_command(label="Nouveau projet…", command=lambda: self.creer_projet_puis(action))
+        self.menu_choix_projet = menu        # gardé pour les essais
+        menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+
+    def lien_garder(self, titre, texte):
+        """« Garder dans le projet » sous une réponse : la sauve comme note du projet."""
+        etiquette = f"garder{self.nb_liens}"
+        self.nb_liens += 1
+        self.document.insert("end", "Garder dans le projet\n", ("sources", "lien", etiquette))
+
+        def garder(event=None):
+            projet = lire_projet(self.projet_actif) if self.projet_actif else None
+            if not projet:
+                return
+            ajouter_note_projet(projet, " ".join(titre.split())[:60], texte)
+            zone = self.document.tag_ranges(etiquette)
+            if zone:
+                self.document.delete(zone[0], zone[1])
+                self.document.insert(zone[0], f"Gardé dans « {projet['nom']} »\n", "sources")
+
+        self.document.tag_bind(etiquette, "<Button-1>", garder)
+
+    def garder_selection_projet(self, selection):
+        """Clic droit → « Garder la sélection dans un projet » : du texte, du code ou un lien."""
+        sorte = sorte_du_texte(selection)
+
+        def garder(projet):
+            ajouter_note_projet(projet, " ".join(selection.split())[:60], selection, sorte,
+                                selection.strip() if sorte == "lien" else "")
+            self.dire_magie(f"Gardé dans le projet « {projet['nom']} ».")
+
+        self.choisir_projet(garder)
+
+    def garder_image_projet(self, image, fait=None):
+        """« Garder dans le projet » (le Studio, les images trouvées) : l'image va dans un projet."""
+        def garder(projet):
+            ajouter_image_projet(projet, image, f"image-{datetime.datetime.now():%Y%m%d-%H%M%S}.png")
+            if fait:
+                fait(projet["nom"])
+            else:
+                self.dire_magie(f"Image gardée dans le projet « {projet['nom']} ».")
+        self.choisir_projet(garder)
+
+    def garder_code_projet(self, chemin, contenu):
+        """« Projet » sur une carte du Codex : le code du fichier devient une note du projet."""
+        def garder(projet):
+            ajouter_note_projet(projet, Path(chemin).name, contenu, "code")
+            if self.codex is not None:
+                self.codex.etat(f"{Path(chemin).name} est gardé dans le projet « {projet['nom']} ».")
+        self.choisir_projet(garder)
+
+    # ---------- Les images libres de droits ----------
+    def ajouter_galerie(self, requete):
+        """Va chercher des images libres de droits pis les met dans la conversation."""
+        if Image is None:
+            self.document.insert("end", MESSAGE_PILLOW + "\n", "reponse")
+            return
+        self.nb_meteo += 1
+        marque, etiquette = f"galerie{self.nb_meteo}", f"attente_galerie{self.nb_meteo}"
+        self.document.mark_set(marque, "end-1c")
+        self.document.mark_gravity(marque, "left")
+        points = ajouter_ligne_attente(self.document, "Je cherche des images libres", TAILLE_AGENT,
+                                       ("attente", etiquette))
+        generation = self.generation
+
+        def travail():
+            trouvees = chercher_images(requete, 4)
+            gardees = []
+            for t in trouvees:
+                try:
+                    t["image_pil"] = telecharger_image(t["image"])
+                    gardees.append(t)
+                except Exception:
+                    pass   # une image qui se télécharge pas, on passe à la suivante
+            if not gardees:
+                raise LookupError(requete)
+            return gardees
+
+        def fini(trouvees, err):
+            if generation != self.generation:
+                points.destroy()
+                return
+            enlever_ligne_attente(self.document, etiquette, points)
+            if err:
+                self.document.insert(marque, message_galerie(err, requete) + "\n", "reponse")
+                return
+            galerie = GalerieImages(self.document, self, requete, trouvees,
+                                    max(self.document.winfo_width() - 60, 440))
+            self.schemas.append(galerie)   # effacée avec la conversation
+            self.document.window_create(marque, window=galerie, pady=8)
+            self.document.insert(f"{marque}+1c", "\n")
+            self.document.see("end")
+            self.document.see(marque)
+
+        self.en_arriere_plan(travail, fini)
+
+    def image_vers_studio(self, image, titre=""):
+        """Une image trouvée devient l'image du Studio : tu peux demander de la modifier."""
+        self.image_courante = image
+        self.image_courante_chemin = garder_image(image, "trouvee")
+        self.placer_studio(self.document.index("end-1c"), image, None,
+                           [titre] if titre else [], anime=True)
 
     # ---------- Le Studio d'applications ----------
     def ajouter_app(self, app, reponse, anime=True):
@@ -7282,6 +8192,7 @@ class AppEcriture(tk.Tk):
 
     def nouveau(self):
         # La conversation d'avant est déjà sauvegardée dans le menu de gauche
+        self.fermer_projets()
         self.fermer_codex()
         self.vider_conversation()
         self.annuler_animation("descente")
