@@ -656,7 +656,8 @@ Un projet garde **tes conversations, tes fichiers pis tes notes au même
 endroit**, pis l'IA s'en sert quand tu travailles dedans. Pratique pour un
 devoir, un livre, un projet d'école.
 
-**L'ouvrir** : menu ☰, clique **Chat** : **→ Projets** sort en dessous.
+**L'ouvrir** : menu ☰, clique **Chat** : **→ Projets** sort en dessous. Ou
+ben directement dans le chat, avec le bouton **📁 Projet ▾** (voir plus bas).
 
 **Créer** : **+ Nouveau projet**, donne-lui un nom. Ensuite :
 
@@ -670,12 +671,31 @@ devoir, un livre, un projet d'école.
 
 **Travailler dans ce projet** commence une conversation dedans. En haut,
 **Projet : …** te rappelle où t'es : un clic ouvre le projet, **×** en sort.
+
+### Le mode projet, directement dans le chat
+
+Sous la boîte, à côté de 🔊 Voix, le bouton **📁 Projet ▾** montre le projet
+dans lequel tu travailles (ou juste « Projet » si t'en as pas choisi). Son
+menu, sans passer par ☰ :
+
+| Dans le menu | Ce que ça fait |
+| --- | --- |
+| **Travailler dans un projet :** puis un nom | la conversation en cours va dans ce projet, pis l'IA le connaît dès ta prochaine question |
+| **Changer de projet :** | pareil, quand t'es déjà dans un projet |
+| **Voir le projet « … »** | ouvre l'écran du projet |
+| **Ajouter des fichiers au projet…** | ajoute des fichiers sans quitter la conversation |
+| **Sortir du projet** | une conversation neuve, hors projet (l'autre reste dans le projet) |
+| **Nouveau projet…** | le crée pis travaille dedans tout de suite |
+| **Tous mes projets** | l'écran des projets |
+
 L'IA reçoit les instructions, le texte de tes fichiers pis tes notes (jusqu'à
 60 000 caractères avec Claude, 8 000 avec un modèle Ollama).
 
 Pour mettre des affaires dans un projet :
 
 - **Garder dans le projet**, sous chaque réponse : la réponse devient une note.
+  Si l'IA a construit une app dans le Studio, l'app est gardée aussi, avec son
+  code au complet (une note de code « Titre.html »).
 - **Clic droit** sur du texte sélectionné → **Garder la sélection dans un
   projet**. Les pouvoirs ✨ Magie sont toujours là, en dessous de Copier.
 - **Clic droit** sur une conversation du menu → **Mettre dans un projet** (ou
@@ -689,6 +709,31 @@ Tout est gardé sur ton ordi, dans `~/.local/share/ecriture/projets/` : un
 dossier par projet, avec `projet.json` pis un dossier `fichiers`. Les dossiers
 faits par l'ancien « Garder dans le projet » deviennent des projets tout seuls,
 avec leurs images.
+
+### Les projets sur le site web
+
+Le site a ses projets aussi, pour bâtir tes projets sur ton téléphone : **☰ →
+Projets**, ou le même bouton **📁 Projet ▾** sous la boîte. On y retrouve les
+instructions pour l'IA, les trois colonnes (conversations, fichiers, notes pis
+liens), **Garder dans le projet** sous les réponses, pis tout le menu du chat.
+Pour garder juste un bout d'une réponse (du code, un lien…), surligne-le, pis
+**📁 Projet ▾ → Garder la sélection dans le projet** (c'est le clic droit de
+l'ordi).
+Sur un téléphone, la liste des projets prend l'écran, pis le projet choisi
+aussi (**‹ Projets** pour revenir).
+
+- **Les fichiers** : du texte (lu au complet par l'IA, 300 000 caractères au
+  plus par fichier) ou des images (réduites à 1024 pixels : la place est
+  comptée). Un fichier qui est ni l'un ni l'autre (un PDF, un Word…) est
+  refusé, pis on te le dit.
+- **Où c'est gardé** : dans ton navigateur (`localStorage`), sur cet
+  appareil-là seulement. Les projets du site pis ceux de l'ordi sont pas
+  mélangés. Si la place manque, on te le dit au lieu de perdre quelque chose.
+- **Ce que l'IA reçoit** : comme sur l'ordi. Avec Ollama ou ta clé Claude, le
+  projet va dans les consignes (8 000 caractères pour Ollama, 60 000 pour
+  Claude). Par le serveur du site, on envoie jamais de consignes : le projet
+  voyage avec ta dernière question (40 000 caractères au plus), comme si tu
+  l'avais collé toi-même.
 
 ## Les images libres de droits
 

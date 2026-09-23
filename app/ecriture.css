@@ -49,6 +49,7 @@ button { font: inherit; color: inherit; }
   cursor: pointer;
   white-space: nowrap;
   transition: background .12s ease, transform .1s ease;
+  -webkit-tap-highlight-color: transparent;   /* sur un téléphone : pas de carré bleu, il a son :active */
 }
 .bouton:hover { background: #ff8c3a; }
 .bouton:active { background: var(--orange-fonce); transform: translateY(1px); }
@@ -312,6 +313,29 @@ button { font: inherit; color: inherit; }
   background: var(--orange); color: #000; outline: 0;
 }
 
+/* « Projet ▾ » sous la boîte : le mode projet, directement dans le chat */
+.projet-bouton { flex: 0 0 auto; }
+.projet-bouton .nom {
+  display: inline-block; max-width: 15em; vertical-align: top;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Quand la place manque, c'est le choix de l'IA pis l'astuce qui rapetissent, pas le projet */
+.options select.moteur { flex: 0 1 auto; min-width: 0; }
+.options .astuce { flex: 1 1 120px; min-width: 0; }
+.menu-projet { left: 0; max-height: 60vh; overflow-y: auto; }
+.menu-plus hr { border: 0; border-top: 1px solid #5e5e5e; margin: 5px 4px; }
+.menu-titre { margin: 6px 12px 2px; font-size: .76rem; font-weight: 700; opacity: .75; }
+.menu-plus .menu-projet-nom { padding-left: 22px; font-weight: 600; }
+/* Un menu qui s'ouvre sous son bouton, n'importe où (« + Ajouter » une conversation) */
+.menu-flottant { position: fixed; bottom: auto; z-index: 45; max-height: 50vh; overflow-y: auto; max-width: 320px; }
+/* « Garder dans le projet » sous une réponse */
+.garder {
+  display: block; margin: 2px 0 8px 46px; padding: 0; border: 0; background: none;
+  font-size: .82rem; text-decoration: underline; cursor: pointer; color: var(--noir);
+}
+.garder:hover { color: var(--orange-fonce); }
+.garde { margin-left: 46px; }
+
 /* Les images jointes, pas encore envoyées : dans la boîte, au-dessus de ce que t'écris */
 .pieces { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 10px 0; }
 .piece {
@@ -340,7 +364,7 @@ button { font: inherit; color: inherit; }
   border-radius: 10px; border: 2px solid var(--gris-bord);
 }
 .avis { font-size: .82rem; font-style: italic; opacity: .85; margin: 4px 0 8px 46px; }
-.options { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.options { position: relative; display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .moteur {
   background: var(--orange); border-radius: 9px;
   padding: 5px 12px; font-size: .78rem; font-weight: 700;
@@ -364,9 +388,95 @@ button { font: inherit; color: inherit; }
   }
   .boite { min-height: 104px; }
   .plus { width: 32px; height: 32px; margin: 0 0 10px 8px; }
+  /* Le choix de l'IA rapetisse pour laisser la place à la voix pis au projet */
+  .options { gap: 6px; }
+  .options select.moteur { flex: 1 1 auto; min-width: 0; max-width: none; }
+  .options .bouton { flex: 0 0 auto; }
+  .projet-bouton .nom { max-width: 5.6em; }
+  .garder, .garde { margin-left: 0; }
   .piece { width: 56px; height: 56px; }
   .vignettes img { height: 104px; }
   .avis { margin-left: 0; }
+}
+
+/* ---------- L'écran des projets ---------- */
+.projets {
+  position: absolute; inset: 0; z-index: 15;
+  display: flex; flex-direction: column; background: var(--gris-fond);
+}
+/* Quand les projets sont ouverts, le chat s'efface (comme avec le Codex) */
+.en-projets .doc, .en-projets .composeur, .en-projets .barre { display: none; }
+.projets-barre {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px 12px 72px;          /* la place du bouton ☰ */
+  border-bottom: 2px solid #5e5e5e; flex: 0 0 auto;
+}
+.projets-titre { font-size: 1.1rem; }
+.projets-barre .fermer { position: static; margin-left: auto; font-size: 1.5rem; }
+.projets-corps { flex: 1; min-height: 0; display: flex; }
+.projets-liste {
+  flex: 0 0 260px; overflow-y: auto; padding: 12px 10px;
+  background: var(--gris-menu); border-right: 2px solid #5e5e5e;
+}
+.projets-ligne {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  border: 0; background: none; cursor: pointer; padding: 9px 10px; border-radius: 9px;
+  font-size: .92rem;
+}
+.projets-ligne:hover { background: #8a8a8a; }
+.projets-ligne.choisi { background: var(--orange); color: #000; font-weight: 700; }
+.projets-ligne .nom { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projets-ligne .actif {
+  flex: 0 0 auto; font-size: .7rem; font-weight: 700; padding: 1px 7px; border-radius: 8px;
+  background: #0000001f;
+}
+.projets-detail { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px 22px; }
+.projets-vide { white-space: pre-line; text-align: center; margin: 12vh auto 0; max-width: 460px; line-height: 1.6; }
+.projet-tete { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.projet-nom { margin: 0; font-size: 1.35rem; flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.projet-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.projets-retour { display: none; }
+.projet-instructions { resize: vertical; min-height: 84px; line-height: 1.45; margin-bottom: 6px; }
+.projet-etat { font-size: .8rem; }
+.projet-colonnes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.projet-colonne {
+  background: var(--gris-menu); border-radius: 12px; padding: 10px 10px 8px;
+  display: flex; flex-direction: column; min-height: 180px;
+}
+.projet-colonne header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.projet-colonne h3 { margin: 0 auto 0 2px; font-size: .92rem; }
+.projet-colonne ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; max-height: 38vh; }
+.projet-colonne li { display: flex; align-items: center; gap: 4px; border-radius: 8px; }
+.projet-colonne li:hover { background: #8a8a8a; }
+.projet-colonne li.vide { opacity: .6; font-size: .84rem; padding: 6px 8px; }
+.projet-element {
+  flex: 1; min-width: 0; text-align: left; border: 0; background: none; cursor: pointer;
+  padding: 7px 8px; font-size: .86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.projet-colonne .retirer {
+  flex: 0 0 auto; border: 0; background: none; cursor: pointer; opacity: .55;
+  font-size: 1rem; line-height: 1; padding: 4px 7px; border-radius: 6px;
+}
+.projet-colonne .retirer:hover { opacity: 1; background: #ffffff40; }
+.fenetre-corps { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+.projet-code {
+  margin: 0; max-height: 58vh; overflow: auto; padding: 12px; border-radius: 10px;
+  background: #262626; color: #e8e8e8; font: .8rem/1.5 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.projet-image { display: block; max-width: 100%; max-height: 62vh; margin: 0 auto; border-radius: 10px; }
+.note-texte { resize: vertical; min-height: 180px; line-height: 1.45; }
+@media (max-width: 720px) {
+  .projets-barre { padding: 10px 12px 10px 66px; gap: 8px; }
+  /* Sur un téléphone : la liste, pis le projet choisi prend tout l'écran */
+  .projets-liste { flex: 1 1 auto; border-right: 0; }
+  .projets-detail { display: none; padding: 14px 14px 18px; }
+  .projets.detail-ouvert .projets-liste { display: none; }
+  .projets.detail-ouvert .projets-detail { display: block; }
+  .projets-retour { display: inline-block; }
+  .projet-colonnes { grid-template-columns: minmax(0, 1fr); }
+  .projet-colonne { min-height: 0; }
+  .projet-colonne ul { max-height: none; }
 }
 
 /* ---------- Les fenêtres par-dessus tout (créer un fichier…) ---------- */
@@ -636,6 +746,8 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   z-index: 50; background: var(--orange); border-radius: var(--r-bouton);
   padding: 10px 18px; font-size: .86rem; font-weight: 700;
   box-shadow: 0 4px 14px #0003;
+  /* Aussi large que son texte (pas juste la moitié de l'écran), sans dépasser */
+  width: max-content; max-width: min(560px, calc(100vw - 32px));
 }
 
 /* ---------- Mode nuit : écran tout noir, texte vert lime, boutons du même orange ---------- */
@@ -678,6 +790,15 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 [data-theme="nuit"] .fenetre .dedans,
 [data-theme="nuit"] .menu-plus { border-color: #333; }
 [data-theme="nuit"] .boite-plus:focus-within { border-color: var(--orange); }
+[data-theme="nuit"] .projets-barre,
+[data-theme="nuit"] .projets-liste { border-color: #333; }
+[data-theme="nuit"] .projet-colonne { background: #0f0f0f; }
+[data-theme="nuit"] .projets-ligne:hover,
+[data-theme="nuit"] .projet-colonne li:hover { background: #1f1f1f; }
+[data-theme="nuit"] .projets-ligne.choisi { background: var(--orange); color: #000; }
+[data-theme="nuit"] .projets-ligne.choisi .actif { background: #0000002e; }
+[data-theme="nuit"] .menu-plus hr { border-top-color: #333; }
+[data-theme="nuit"] .projet-colonne .retirer:hover { background: #ffffff26; }
 [data-theme="nuit"] .trait { border-top-color: #333; }
 [data-theme="nuit"] .session button:hover,
 [data-theme="nuit"] .codex-onglet .x:hover,

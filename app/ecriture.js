@@ -531,8 +531,9 @@ function sauverSession() {
   // Les images en grand restent en mémoire le temps de la conversation : on garde les vignettes
   const garde = messages.map((m) => !m.images ? m
     : { ...m, images: m.images.map(({ mini, ml, mh }) => ({ mini, ml, mh })) });
+  const projet = window.Projets?.actif();
   liste.unshift({ id: sessionId, titre: premiere.replace(/\s+/g, " ").slice(0, 42),
-                  modifie: Date.now(), messages: garde });
+                  modifie: Date.now(), messages: garde, ...(projet ? { projet } : {}) });
   ecrireSessions(liste);
   dessinerSessions();
 }
@@ -562,8 +563,11 @@ function ouvrirSession(id) {
   const s = lireSessions().find((x) => x.id === id);
   if (!s) return;
   nouveau(false);
+  fermerCodex();                        // on veut la voir, cette conversation
+  window.Projets?.fermerEcran();
   sessionId = s.id;
   messages = s.messages || [];
+  window.Projets?.mettreActif(s.projet || null);
   for (const m of messages) {
     if (m.role === "user") {
       doc.append(creer("p", "question", m.content));
@@ -998,6 +1002,28 @@ function preparerEnvoi(liste, moteur, voit) {
   return envoyes;
 }
 
+/* Le projet dans lequel tu travailles : ses instructions, ses fichiers pis ses notes vont avec
+   ta question, comme sur l'ordi. Pour Ollama pis ta clé Claude, dans les consignes. Le serveur
+   du site, lui, écrit ses propres consignes (on lui en envoie jamais) : le projet voyage alors
+   avec ta dernière question. Rend les consignes à utiliser (ou undefined : celles de base). */
+const CONTEXTE_CLAUDE = 60000, CONTEXTE_OLLAMA = 8000, CONTEXTE_SERVEUR = 40000;
+const TEXTE_SERVEUR_MAX = 59000;      // le serveur coupe un message à 60 000 caractères
+
+function avecLeProjet(envoyes, moteur) {
+  const projet = window.Projets?.actif();
+  if (!projet) return undefined;
+  if (moteur.type === "ollama") {
+    return instructionsSysteme(false) + "\n\n" + window.Projets.contexte(projet, CONTEXTE_OLLAMA);
+  }
+  if (lire(CLE_CLAUDE)) return instructionsSysteme(true) + "\n\n" + window.Projets.contexte(projet, CONTEXTE_CLAUDE);
+  const derniere = envoyes[envoyes.length - 1];
+  const place = TEXTE_SERVEUR_MAX - derniere.content.length - 80;
+  if (place < 500) return undefined;             // une question énorme : elle passe avant le projet
+  const contexte = window.Projets.contexte(projet, Math.min(CONTEXTE_SERVEUR, place)).slice(0, place);
+  derniere.content = `[Mon projet, pour t'aider à répondre]\n${contexte}\n[Fin du projet]\n\n${derniere.content}`;
+  return undefined;
+}
+
 async function envoyer() {
   if (occupe) return;
   const tapee = saisie.value.trim();
@@ -1043,6 +1069,7 @@ async function envoyer() {
     }
   }
   const envoyes = preparerEnvoi(messages, moteur, voit);
+  const systeme = avecLeProjet(envoyes, moteur);
   let para = null, curseur = null, brut = "", sources = [], erreur = null;
   let studio = null;          // la carte de l'app, si l'IA en construit une
 
@@ -1053,7 +1080,7 @@ async function envoyer() {
   };
 
   try {
-    for await (const ev of flux(moteur, envoyes)) {
+    for await (const ev of flux(moteur, envoyes, { systeme })) {
       if (mien !== generation) { enlever(); return; }   // « Nouveau » pendant la réponse
       if (ev.type === "texte") {
         if (!para) {
@@ -1111,6 +1138,7 @@ async function envoyer() {
   if (etapes.length) doc.append(schema(etapes));
   if (sources.length) doc.append(blocSources(sources));
   if (avis) doc.append(creer("p", "avis", avis));
+  if (window.Projets?.actif()) doc.append(window.Projets.lienGarder(question, para.textContent, app));
   messages.push({ role: "assistant", content: para.textContent, etapes, sources,
                   ...(app ? { app } : {}) });
   parler(para.textContent);   // la réponse, lue à voix haute
@@ -1310,12 +1338,15 @@ function allerPage(nom) {
 
 function majModes() {
   const codex = corps.classList.contains("en-codex");
-  $("#nav-chat").classList.toggle("actif", !codex);
+  const projets = corps.classList.contains("en-projets");
+  $("#nav-chat").classList.toggle("actif", !codex && !projets);
   $("#nav-codex").classList.toggle("actif", codex);
+  $("#nav-projets").classList.toggle("actif", projets);
 }
 
 function ouvrirCodex() {
   fermerMenu();
+  window.Projets?.fermerEcran();
   corps.classList.add("en-codex");
   majModes();
   window.Codex?.ouvrir();
@@ -1325,7 +1356,7 @@ function fermerCodex() {
   majModes();
 }
 
-function allerChat() { fermerCodex(); fermerMenu(); saisie.focus(); }
+function allerChat() { fermerCodex(); window.Projets?.fermerEcran(); fermerMenu(); saisie.focus(); }
 
 /* ---------- Les IA gratuites qu'on conseille ---------- */
 function dessinerModelesGratuits(installes = []) {
@@ -1349,7 +1380,7 @@ function dessinerModelesGratuits(installes = []) {
 }
 
 /* ---------- L'app : s'installer, pis se tenir à jour ---------- */
-const VERSION_APP = "2.9.0";
+const VERSION_APP = "2.10.0";
 let inviteInstall = null;      // le navigateur nous prête son « Installer »
 let rechargeFaite = false;
 
@@ -1426,6 +1457,13 @@ window.Ecriture = {
   $, creer, lire, ecrire, flux, moteurActuel, sansReflexion, annoncer,
   parler, taire, deverrouillerVoix,
   CLE_GITHUB,
+  // pour les projets
+  lireSessions, ecrireSessions, dessinerSessions, ouvrirSession, sauverSession, fermerCodex, majModes,
+  reduire, chargerImage, selectionDansDoc,
+  nouveau: () => nouveau(),
+  session: () => sessionId,
+  messages: () => messages,
+  focus: () => saisie.focus(),
   QUEBECOIS,
   fermerMenu: () => fermerMenu(),
 };
@@ -1435,7 +1473,7 @@ $("#envoyer").onclick = envoyer;
 for (const b of document.querySelectorAll(".bouton.voix")) b.onclick = clicVoix;
 majBoutonsVoix();
 $("#nouveau").onclick = () => nouveau();
-$("#nouveau-menu").onclick = () => nouveau();
+$("#nouveau-menu").onclick = () => { allerChat(); nouveau(); };
 $("#sauvegarder").onclick = sauvegarder;
 $("#menu-bouton").onclick = basculerMenu;
 choixMoteur.onchange = () => choisirMoteur(choixMoteur.value);
@@ -1484,6 +1522,7 @@ $("#copier-ollama").onclick = () => {
 $("#rafraichir-ollama").onclick = majOllama;
 $("#nav-chat").onclick = allerChat;
 $("#nav-codex").onclick = ouvrirCodex;
+$("#nav-projets").onclick = () => window.Projets?.ouvrirEcran();
 $("#nav-param").onclick = () => allerPage("parametres");
 $("#nav-nuit").onclick = () => mettreNuit(!nuitActive());
 if (nuitActive()) mettreNuit(true);   // le bouton dit « Mode jour » dès l'ouverture
@@ -1514,6 +1553,7 @@ addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (!fenetreFichier.hidden) fermerFenetreFichier();
     else if (!menuPlus.hidden) { fermerMenuPlus(); boutonPlus.focus(); }
+    else if (window.Projets?.echap()) { /* les projets ont fermé ce qui était ouvert */ }
     else if (corps.classList.contains("en-codex")) fermerCodex();
     else fermerMenu();
   }

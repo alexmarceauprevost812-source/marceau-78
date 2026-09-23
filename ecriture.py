@@ -257,7 +257,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 HEURES_MAJ = 6         # on revérifie les mises à jour aux 6 heures, même si l'app reste ouverte
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
@@ -6158,6 +6158,9 @@ class AppEcriture(tk.Tk):
         bouton_orange(self.options, "\u2728  Magie", self.ouvrir_menu_magie, taille=10).pack(
             side="left", padx=(8, 0))
         self.creer_bouton_voix(self.options).pack(side="left", padx=(8, 0))
+        # Le mode projet, à portée de main : choisir un projet, en créer un, en sortir
+        self.bouton_projet = self.creer_bouton_projet(self.options)
+        self.bouton_projet.pack(side="left", padx=(8, 0))
         self.cadre_pieces = tk.Frame(self.options, bg=GRIS_FOND)
         self.cadre_pieces.pack(side="left")
 
@@ -7171,7 +7174,7 @@ class AppEcriture(tk.Tk):
                 if app:
                     self.ajouter_app(app, reponse)
                 if self.projet_actif:
-                    self.lien_garder(self.question_en_cours, texte)
+                    self.lien_garder(self.question_en_cours, texte, app)
                 self.fin_reponse(index)
                 self.dire_a_voix_haute(texte)
 
@@ -7885,6 +7888,7 @@ class AppEcriture(tk.Tk):
 
     def maj_puce_projet(self):
         projet = lire_projet(self.projet_actif) if self.projet_actif else None
+        self.maj_bouton_projet(projet)
         if not projet:
             self.projet_actif = None
             self.puce_projet.place_forget()
@@ -7892,6 +7896,92 @@ class AppEcriture(tk.Tk):
         nom = projet["nom"] if len(projet["nom"]) <= 24 else projet["nom"][:23] + "…"
         self.puce_nom.config(text=f"Projet : {nom}")
         self.puce_projet.place(x=70, y=14, height=38)
+
+    # ---------- Le mode projet, sous la boîte ----------
+    def creer_bouton_projet(self, parent):
+        """« Projet ▾ » : le mode projet directement dans le chat, sans passer par le menu ☰."""
+        bouton = tk.Menubutton(
+            parent, text="\U0001f4c1  Projet  ▾", bg=ORANGE, fg=NOIR, activebackground=ORANGE_FONCE,
+            activeforeground=NOIR, font=(FAMILLE, 10, "bold"), relief="flat", bd=0,
+            highlightthickness=0, padx=12, pady=5, cursor="hand2", direction="above")
+        menu = tk.Menu(bouton, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
+                       activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
+        menu.config(postcommand=lambda: self.remplir_menu_projet(menu))   # relu à chaque ouverture
+        bouton["menu"] = menu
+        self.menu_projet = menu              # gardé pour les essais
+        return bouton
+
+    def maj_bouton_projet(self, projet=None):
+        """Le bouton montre le projet dans lequel tu travailles."""
+        if not hasattr(self, "bouton_projet"):
+            return
+        if projet:
+            nom = projet["nom"] if len(projet["nom"]) <= 22 else projet["nom"][:21] + "…"
+            self.bouton_projet.config(text=f"\U0001f4c1  {nom}  ▾")
+        else:
+            self.bouton_projet.config(text="\U0001f4c1  Projet  ▾")
+
+    def remplir_menu_projet(self, menu):
+        menu.delete(0, "end")
+        projet = lire_projet(self.projet_actif) if self.projet_actif else None
+        if projet:
+            menu.add_command(label=f"Voir le projet « {projet['nom']} »",
+                             command=lambda: self.ouvrir_projets(projet["id"]))
+            menu.add_command(label="Ajouter des fichiers au projet…",
+                             command=lambda: self.fichiers_vers_projet(projet["id"]))
+            menu.add_command(label="Sortir du projet", command=self.quitter_projet)
+            menu.add_separator()
+        autres = [p for p in lister_projets() if p["id"] != self.projet_actif]
+        if autres:
+            menu.add_command(label="Changer de projet :" if projet else "Travailler dans un projet :",
+                             state="disabled")
+            for p in autres[:15]:
+                menu.add_command(label="      " + p["nom"],
+                                 command=lambda pid=p["id"]: self.projet_depuis_chat(pid))
+            menu.add_separator()
+        menu.add_command(label="Nouveau projet…", command=lambda: self.creer_projet_puis(
+            lambda p: self.projet_depuis_chat(p["id"])))
+        menu.add_command(label="Tous mes projets", command=self.ouvrir_projets)
+
+    def projet_depuis_chat(self, pid):
+        """Choisi sous la boîte : la conversation en cours va dans le projet, pis l'IA connaît
+        ses instructions, ses fichiers pis ses notes dès ta prochaine question."""
+        projet = lire_projet(pid)
+        if not projet:
+            return
+        self.projet_actif = pid
+        if self.messages:
+            self.sauver_session()            # la conversation est gardée avec son projet
+        self.maj_puce_projet()
+        self.annoncer_chat(f"Tu travailles dans le projet « {projet['nom']} » : l'IA connaît ses "
+                           "instructions, ses fichiers pis ses notes.",
+                           f"Projet « {projet['nom']} » : l'IA le connaît.")
+        self.saisie.focus_set()
+
+    def fichiers_vers_projet(self, pid):
+        projet = lire_projet(pid)
+        if not projet:
+            return
+        fichiers = filedialog.askopenfilenames(title=f"Fichiers à mettre dans « {projet['nom']} »",
+                                               parent=self)
+        for f in fichiers:
+            ajouter_fichier_projet(projet, f)
+        if fichiers:
+            n = len(fichiers)
+            self.annoncer_chat(f"{n} fichier{'s' if n > 1 else ''} ajouté{'s' if n > 1 else ''} "
+                               f"au projet « {projet['nom']} ».")
+
+    def annoncer_chat(self, message, court=None):
+        """Un mot dans la conversation; sur l'accueil (pas encore de conversation), à la place
+        de « Pose une question… », le temps de le lire."""
+        if self.messages:
+            self.dire_magie(message)
+            return
+        self.invite.config(text=court or message, wraplength=max(200, self.zone_saisie.winfo_width() - 20))
+        if getattr(self, "remettre_invite", None):
+            self.after_cancel(self.remettre_invite)
+        self.remettre_invite = self.after(
+            4500, lambda: self.invite.config(text="Pose une question…", wraplength=0))
 
     def travailler_dans_projet(self, pid):
         """Nouvelle conversation dans ce projet : l'IA connaît ses instructions, fichiers pis notes."""
@@ -7935,8 +8025,9 @@ class AppEcriture(tk.Tk):
         self.menu_choix_projet = menu        # gardé pour les essais
         menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
 
-    def lien_garder(self, titre, texte):
-        """« Garder dans le projet » sous une réponse : la sauve comme note du projet."""
+    def lien_garder(self, titre, texte, app=None):
+        """« Garder dans le projet » sous une réponse : la sauve comme note du projet
+        (pis l'app du Studio, s'il y en a une, avec son code au complet)."""
         etiquette = f"garder{self.nb_liens}"
         self.nb_liens += 1
         self.document.insert("end", "Garder dans le projet\n", ("sources", "lien", etiquette))
@@ -7946,6 +8037,8 @@ class AppEcriture(tk.Tk):
             if not projet:
                 return
             ajouter_note_projet(projet, " ".join(titre.split())[:60], texte)
+            if app:
+                ajouter_note_projet(projet, app["titre"][:55] + ".html", app["html"], "code")
             zone = self.document.tag_ranges(etiquette)
             if zone:
                 self.document.delete(zone[0], zone[1])

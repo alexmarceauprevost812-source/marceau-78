@@ -32,6 +32,7 @@ try {
     <nav class="modes">
       <button class="mode actif" id="nav-chat"><span class="pic">✎</span> Chat</button>
       <button class="mode" id="nav-codex"><span class="pic">▤</span> Codex</button>
+      <button class="mode" id="nav-projets"><span class="pic">▦</span> Projets</button>
       <button class="mode" id="nav-param"><span class="pic">⚙</span> Paramètres</button>
       <button class="mode" id="nav-nuit"><span class="pic" id="nuit-pic">☾</span> <span id="nuit-texte">Mode nuit</span></button>
     </nav>
@@ -211,7 +212,33 @@ try {
   <div class="options">
     <select class="moteur" id="moteur" aria-label="Quelle IA répond"></select>
     <button class="bouton petit voix" id="voix" type="button">🔊 Voix</button>
+    <!-- Le mode projet, directement dans le chat -->
+    <button class="bouton petit projet-bouton" id="bouton-projet" type="button"
+            aria-haspopup="menu" aria-expanded="false">📁 Projet ▾</button>
     <span class="astuce" id="astuce-moteur"></span>
+    <div class="menu-plus menu-projet" id="menu-projet" role="menu" hidden></div>
+  </div>
+</div>
+
+<!-- ---------- Les projets : conversations, fichiers pis notes au même endroit ---------- -->
+<section class="projets" id="projets" hidden>
+  <div class="projets-barre">
+    <strong class="projets-titre">Projets</strong>
+    <button class="bouton petit" id="projets-nouveau" type="button">+ Nouveau projet</button>
+    <button class="fermer" id="projets-fermer" type="button" aria-label="Fermer les projets">×</button>
+  </div>
+  <div class="projets-corps">
+    <nav class="projets-liste" id="projets-liste" aria-label="Tes projets"></nav>
+    <div class="projets-detail" id="projets-detail"></div>
+  </div>
+</section>
+<div class="menu-plus menu-flottant" id="menu-conversations" role="menu" hidden></div>
+<div class="fenetre" id="fenetre-projet" hidden>
+  <div class="dedans" role="dialog" aria-modal="true" aria-labelledby="fenetre-projet-titre">
+    <button class="fermer" id="fenetre-projet-fermer" type="button" aria-label="Fermer">×</button>
+    <h3 id="fenetre-projet-titre"></h3>
+    <div class="fenetre-corps" id="fenetre-projet-corps"></div>
+    <div class="rang-boutons" id="fenetre-projet-boutons"></div>
   </div>
 </div>
 
@@ -249,6 +276,7 @@ try {
 
 <script src="/app/fichiers.js"></script>
 <script src="/app/ecriture.js"></script>
+<script src="/app/projets.js"></script>
 <script src="/app/codex.js"></script>
 </body>
 </html>
