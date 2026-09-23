@@ -68,6 +68,32 @@ POLICE_CODE = (FAMILLE_CODE, 12)
 TAILLE_AGENT = 16    # taille du texte des réponses de l'agent (tes questions : 14)
 COULEUR_LIEN = "#6e2a00"   # liens web cliquables
 
+# ---------- Mode nuit : écran tout noir, texte vert lime, boutons du même orange ----------
+# Chaque couleur de jour a sa couleur de nuit. Elles sont toutes différentes (même les noirs,
+# à un cheveu près, invisible à l'œil) : comme ça, on revient au jour sans se tromper.
+VERT_NUIT = "#7ffe00"      # le texte : vert lime (un cheveu à côté de LIME, pour la même raison)
+FONDS_NUIT = {
+    GRIS_FOND: "#000000",
+    GRIS_ZONE: "#010101",
+    GRIS_MENU: "#020202",
+    GRIS_INACTIF: "#1a1a1a",
+    GRIS_BOITE: "#0f0f0f",
+    GRIS_BORD: "#333333",
+    GRIS_LIEN: "#404040",
+}
+TEXTES_NUIT = {
+    NOIR: VERT_NUIT,
+    "#2e2e2e": "#66cc00",      # le petit texte d'explication : un vert plus doux
+    "#4a4a4a": "#4c9900",
+    "#3a3a3a": "#3d7a00",
+    "#1d5e00": "#a0ff50",      # « installé ✓ »
+    COULEUR_LIEN: "#ffa060",   # les liens : orange pâle, pour se voir sur le noir
+}
+TEXTE = NOIR                   # la couleur du texte en ce moment (vert lime la nuit)
+_COULEURS_JOUR = {nom: globals()[nom] for nom in (
+    "GRIS_FOND", "GRIS_ZONE", "GRIS_MENU", "GRIS_INACTIF", "GRIS_BOITE", "GRIS_BORD", "GRIS_LIEN",
+    "COULEUR_LIEN")}
+
 MARGE = 25            # espace entre la zone d'écriture et le bas de l'écran
 LARGEUR = 0.70        # largeur des zones (70 % de la fenêtre)
 HAUT_DOC = 70         # où commence le texte en haut de l'écran
@@ -111,6 +137,102 @@ COULEURS_CODE = {
     "titre":       ("#ff7a1a", "bold"),     # # Titre en Markdown
 }
 
+def mettre_couleurs(nuit):
+    """Les couleurs de base pour tout ce qui sera construit à partir de maintenant."""
+    global TEXTE
+    for nom, jour in _COULEURS_JOUR.items():
+        globals()[nom] = (FONDS_NUIT.get(jour) or TEXTES_NUIT[jour]) if nuit else jour
+    TEXTE = VERT_NUIT if nuit else NOIR
+
+
+def texte_sur(fond):
+    """Le texte sur ce fond : noir sur l'orange (de jour comme de nuit), sinon celui du thème."""
+    return NOIR if fond in (ORANGE, ORANGE_FONCE) else TEXTE
+
+
+def couleur_texte(jour):
+    """Une couleur de texte choisie pour le jour, traduite si c'est la nuit."""
+    return TEXTES_NUIT.get(jour, jour) if TEXTE != NOIR else jour
+
+
+OPTIONS_FONDS = ("background", "activebackground", "highlightbackground", "troughcolor",
+                 "readonlybackground", "disabledbackground", "selectcolor")
+# Chaque couleur de texte, avec le fond sur lequel elle s'écrit
+OPTIONS_TEXTES = (("foreground", "background"), ("activeforeground", "activebackground"),
+                  ("disabledforeground", "background"), ("insertbackground", "background"),
+                  ("selectforeground", "selectbackground"))
+NOMS_COULEURS = {"black": "#000000", "white": "#ffffff"}
+
+
+def _couleur(valeur):
+    c = str(valeur).strip().lower()
+    return NOMS_COULEURS.get(c, c)
+
+
+def _tables(nuit):
+    if nuit:
+        return FONDS_NUIT, TEXTES_NUIT
+    return {n: j for j, n in FONDS_NUIT.items()}, {n: j for j, n in TEXTES_NUIT.items()}
+
+
+def _repeindre_un(w, fonds, textes):
+    """Change les couleurs d'un seul widget (pis de son contenu : dessins, étiquettes, lignes)."""
+    try:
+        options = set(w.keys())
+    except (tk.TclError, AttributeError):
+        return
+    changer = {}
+    for option in OPTIONS_FONDS:
+        if option in options:
+            c = _couleur(w.cget(option))
+            if c in fonds:
+                changer[option] = fonds[c]
+    for option, sous in OPTIONS_TEXTES:
+        if option in options:
+            c = _couleur(w.cget(option))
+            fond = _couleur(changer.get(sous) or (w.cget(sous) if sous in options else ""))
+            if c in textes and fond not in (ORANGE, ORANGE_FONCE):   # sur l'orange : noir
+                changer[option] = textes[c]
+    if changer:
+        w.configure(**changer)
+    if isinstance(w, tk.Canvas):
+        for item in w.find_all():
+            if "sur_orange" in w.gettags(item):
+                continue                          # du texte noir sur un rond orange : il reste noir
+            table = textes if w.type(item) == "text" else fonds
+            for option in ("fill", "outline"):
+                try:
+                    c = _couleur(w.itemcget(item, option))
+                except tk.TclError:
+                    continue
+                if c in table:
+                    w.itemconfigure(item, **{option: table[c]})
+    elif isinstance(w, tk.Text):
+        for etiquette in w.tag_names():
+            fond = _couleur(w.tag_cget(etiquette, "background"))
+            if fond in fonds:
+                w.tag_configure(etiquette, background=fonds[fond])
+                fond = fonds[fond]
+            c = _couleur(w.tag_cget(etiquette, "foreground"))
+            if c in textes and fond not in (ORANGE, ORANGE_FONCE):
+                w.tag_configure(etiquette, foreground=textes[c])
+    elif isinstance(w, tk.Listbox):
+        for i in range(w.size()):
+            c = _couleur(w.itemcget(i, "foreground"))
+            if c in textes:
+                w.itemconfigure(i, foreground=textes[c])
+
+
+def repeindre(racine, nuit):
+    """Passe une fenêtre au complet (tous ses widgets) aux couleurs de nuit, ou de jour."""
+    fonds, textes = _tables(nuit)
+    a_voir = [racine]
+    while a_voir:
+        w = a_voir.pop()
+        _repeindre_un(w, fonds, textes)
+        a_voir.extend(w.winfo_children())
+
+
 # ---------- Réglages des IA et de GitHub ----------
 MODELES_CLAUDE = (
     ("claude-opus-5",    "Opus 5",    "le plus capable",            "5 $ / 25 $"),
@@ -135,7 +257,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 HEURES_MAJ = 6         # on revérifie les mises à jour aux 6 heures, même si l'app reste ouverte
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
@@ -886,13 +1008,13 @@ class CarteMeteo(tk.Canvas):
         description, icone = decrire_meteo(a.get("weather_code", 3), bool(a.get("is_day", 1)))
         W, H = largeur, self.HAUTEUR
         rectangle_arrondi(self, 4, 4, W - 4, H - 4, 18, fill=GRIS_BOITE, outline=ORANGE, width=2)
-        self.create_text(W - 24, 22, anchor="ne", text=meteo["nom"], fill=NOIR, font=(FAMILLE, 15, "bold"))
-        self.create_text(W - 24, 46, anchor="ne", text=meteo["region"], fill="#2e2e2e", font=(FAMILLE, 10))
+        self.create_text(W - 24, 22, anchor="ne", text=meteo["nom"], fill=TEXTE, font=(FAMILLE, 15, "bold"))
+        self.create_text(W - 24, 46, anchor="ne", text=meteo["region"], fill=couleur_texte("#2e2e2e"), font=(FAMILLE, 10))
         self.icone(icone, 80, 82, 108, anime=True)
         self.create_text(152, 26, anchor="nw", text=f"{arrondi(a.get('temperature_2m'))}°",
-                         fill=NOIR, font=(FAMILLE, 44, "bold"))
-        self.create_text(154, 98, anchor="nw", text=description, fill=NOIR, font=(FAMILLE, 13, "bold"))
-        self.create_text(154, 122, anchor="nw", fill="#2e2e2e", font=(FAMILLE, 10), text=(
+                         fill=TEXTE, font=(FAMILLE, 44, "bold"))
+        self.create_text(154, 98, anchor="nw", text=description, fill=TEXTE, font=(FAMILLE, 13, "bold"))
+        self.create_text(154, 122, anchor="nw", fill=couleur_texte("#2e2e2e"), font=(FAMILLE, 10), text=(
             f"Ressenti {arrondi(a.get('apparent_temperature'))}°    "
             f"Vent {arrondi(a.get('wind_speed_10m'))} km/h    "
             f"Humidité {arrondi(a.get('relative_humidity_2m'))} %"))
@@ -902,13 +1024,13 @@ class CarteMeteo(tk.Canvas):
         for i, date in enumerate(dates):
             cx = 24 + colonne * (i + 0.5)
             nom = "Auj." if i == 0 else JOURS[datetime.date.fromisoformat(date).weekday()]
-            self.create_text(cx, 168, text=nom, fill=NOIR, font=(FAMILLE, 10, "bold"))
+            self.create_text(cx, 168, text=nom, fill=TEXTE, font=(FAMILLE, 10, "bold"))
             self.icone(decrire_meteo(j["weather_code"][i])[1], cx, 198, 38, anime=False)
-            self.create_text(cx, 230, fill=NOIR, font=(FAMILLE, 10, "bold"), text=(
+            self.create_text(cx, 230, fill=TEXTE, font=(FAMILLE, 10, "bold"), text=(
                 f"{arrondi(j['temperature_2m_max'][i])}° / {arrondi(j['temperature_2m_min'][i])}°"))
             proba = (j.get("precipitation_probability_max") or [None] * len(dates))[i]
             if proba is not None:
-                self.create_text(cx, 246, text=f"Précip. {proba} %", fill="#2e2e2e", font=(FAMILLE, 8))
+                self.create_text(cx, 246, text=f"Précip. {proba} %", fill=couleur_texte("#2e2e2e"), font=(FAMILLE, 8))
 
     # ----- Les icônes, dessinées avec des formes -----
     def icone(self, sorte, cx, cy, s, anime):
@@ -2897,7 +3019,7 @@ class SchemaAnime(tk.Canvas):
         y = 12
         bords = []   # (haut, bas) de chaque boîte
         for i, texte in enumerate(etapes):
-            id_texte = self.create_text(x0 + 60, y, text=texte, anchor="nw", fill=NOIR,
+            id_texte = self.create_text(x0 + 60, y, text=texte, anchor="nw", fill=TEXTE,
                                         width=l_boite - 80, font=(FAMILLE, 12))
             gauche, haut, droite, bas = self.bbox(id_texte)
             h_texte = bas - haut
@@ -2908,7 +3030,8 @@ class SchemaAnime(tk.Canvas):
             self.tag_lower(boite, id_texte)
             ny = y + h / 2
             self.create_oval(x0 + 16, ny - 15, x0 + 46, ny + 15, fill=ORANGE, outline="")
-            self.create_text(x0 + 31, ny, text=str(i + 1), fill=NOIR, font=(FAMILLE, 11, "bold"))
+            self.create_text(x0 + 31, ny, text=str(i + 1), fill=NOIR, font=(FAMILLE, 11, "bold"),
+                             tags=("sur_orange",))   # noir sur l'orange, même la nuit
             self.boites.append(boite)
             bords.append((y, y + h))
             y += h + self.ESPACE
@@ -3242,7 +3365,7 @@ class IAGratuites(tk.Toplevel):
             self.montrer_marche_a_suivre(False)
         for nom, (marque, bouton) in self.rangs.items():
             pose = nom in courts
-            marque.config(text="installé ✓" if pose else "", fg="#1d5e00")
+            marque.config(text="installé ✓" if pose else "", fg=couleur_texte("#1d5e00"))
             bouton.config(text="Réinstaller" if pose else "Copier")
         self.app.rafraichir_moteurs_partout()
 
@@ -4402,7 +4525,7 @@ class CodexVue(tk.Frame):
         self.afficher_menu_projets()   # le dossier de ton ordi reste offert, même si GitHub bloque
 
     def afficher_menu_projets(self):
-        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
                        activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
         menu.add_command(label="Un dossier sur mon ordi (avec OpenCode)…", command=self.choisir_dossier)
         menu.add_separator()
@@ -4536,7 +4659,7 @@ class CodexVue(tk.Frame):
             for texte, action, police in (
                     (nom, lambda o=o: self.activer(o), (FAMILLE, 10, "bold" if actif else "normal")),
                     ("×", lambda o=o: self.fermer_onglet(o), (FAMILLE, 12, "bold"))):
-                tk.Button(cadre, text=texte, command=action, bg=fond, fg=NOIR,
+                tk.Button(cadre, text=texte, command=action, bg=fond, fg=texte_sur(fond),
                           activebackground=ORANGE_FONCE, relief="flat", bd=0, highlightthickness=0,
                           font=police, padx=8, cursor="hand2").pack(side="left", fill="y")
 
@@ -5251,6 +5374,8 @@ class AppEcriture(tk.Tk):
     def __init__(self):
         super().__init__()
         choisir_polices(self)   # la police du système, avant de bâtir la moindre affaire
+        self.nuit = bool(lire_reglages().get("nuit"))   # le mode nuit, aussi avant de bâtir
+        mettre_couleurs(self.nuit)
         self.title("Marceau")
         self.geometry("1100x720")
         self.minsize(960, 560)
@@ -5357,6 +5482,10 @@ class AppEcriture(tk.Tk):
             self.logo.au_centre()
         self.mettre_icone()
         self.saisie.focus_set()
+        # La nuit, tout ce qui apparaît (fenêtres, cartes, menus…) prend les couleurs de nuit
+        self.bind_all("<Map>", self.sur_apparition, add="+")
+        if self.nuit:
+            repeindre(self, True)
         self.after(80, self.traiter_taches)
         self.after(300, self.charger_modeles_claude)
         self.after(1500, self.verifier_maj)   # sans déranger : ça se fait en arrière-plan
@@ -5499,7 +5628,7 @@ class AppEcriture(tk.Tk):
             activebackground=ORANGE_FONCE, activeforeground=NOIR, font=(FAMILLE, 10, "bold"),
             relief="flat", bd=0, highlightthickness=0, padx=12, pady=5, cursor="hand2",
             direction="above")
-        menu = tk.Menu(bouton, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+        menu = tk.Menu(bouton, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
                        activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
         menu.config(postcommand=lambda: self.remplir_menu_moteurs(menu))  # relit Ollama à chaque ouverture
         bouton["menu"] = menu
@@ -5592,6 +5721,29 @@ class AppEcriture(tk.Tk):
             relief="flat", bd=0, highlightthickness=0, cursor="hand2")
         self.bouton_menu.place(x=15, y=14, width=46, height=38)
 
+    # ---------- Le mode nuit ----------
+    def texte_nuit(self):
+        """(pictogramme, nom) du bouton : ce qu'un clic va faire."""
+        return ("\u263c", "Mode jour") if self.nuit else ("\u263e", "Mode nuit")
+
+    def basculer_nuit(self):
+        """Écran tout noir, texte vert lime, boutons du même orange. Un autre clic : le gris revient."""
+        self.nuit = not self.nuit
+        mettre_couleurs(self.nuit)
+        repeindre(self, self.nuit)
+        self.maj_navigation()
+        self.maj_boutons_voix()
+        icone, texte = self.texte_nuit()
+        self.nav_nuit.config(text=f"  {icone}   {texte}")
+        reglages = lire_reglages()
+        reglages["nuit"] = self.nuit
+        enregistrer_reglages(reglages)
+
+    def sur_apparition(self, event):
+        """La nuit, ce qui apparaît (une fenêtre, une carte, un menu…) prend les couleurs de nuit."""
+        if self.nuit and isinstance(event.widget, tk.Misc):
+            _repeindre_un(event.widget, FONDS_NUIT, TEXTES_NUIT)
+
     def bouton_nav(self, parent, icone, texte, commande):
         """Un des trois grands boutons du menu : pictogramme à gauche, nom à côté."""
         return tk.Button(parent, text=f"  {icone}   {texte}", command=commande, anchor="w",
@@ -5646,7 +5798,9 @@ class AppEcriture(tk.Tk):
         self.nav_codex.pack(fill="x", padx=14, pady=(0, 8))
         self.nav_param = self.bouton_nav(p, "\u2699", "Paramètres",
                                          lambda: self.aller_page("parametres"))
-        self.nav_param.pack(fill="x", padx=14)
+        self.nav_param.pack(fill="x", padx=14, pady=(0, 8))
+        self.nav_nuit = self.bouton_nav(p, *self.texte_nuit(), self.basculer_nuit)
+        self.nav_nuit.pack(fill="x", padx=14)
         self.separateur(p, pady=18)
         # En dessous : juste tes conversations. Tout le réglage est dans Paramètres.
         bouton_orange(p, "+ Nouvelle conversation", self.nouveau).pack(
@@ -5914,8 +6068,9 @@ class AppEcriture(tk.Tk):
 
     def maj_navigation(self):
         codex = self.codex_visible()
-        self.nav_chat.config(bg=GRIS_INACTIF if codex else ORANGE)
-        self.nav_codex.config(bg=ORANGE if codex else GRIS_INACTIF)
+        for bouton, fond in ((self.nav_chat, GRIS_INACTIF if codex else ORANGE),
+                             (self.nav_codex, ORANGE if codex else GRIS_INACTIF)):
+            bouton.config(bg=fond, fg=texte_sur(fond))
 
     def aller_chat(self):
         self.fermer_codex()
@@ -5933,7 +6088,7 @@ class AppEcriture(tk.Tk):
         sessions = lister_sessions()
         if not sessions:
             liste.insert("end", "  Aucune conversation encore")
-            liste.itemconfig(0, fg="#3a3a3a")
+            liste.itemconfig(0, fg=couleur_texte("#3a3a3a"))
             self.ids_sessions.append(None)
             return
         for i, s in enumerate(sessions):
@@ -5961,7 +6116,7 @@ class AppEcriture(tk.Tk):
         if i < 0 or i >= len(self.ids_sessions) or self.ids_sessions[i] is None:
             return
         sid = self.ids_sessions[i]
-        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
                        activeforeground=NOIR, font=(FAMILLE, 11))
         menu.add_command(label="Supprimer la conversation", command=lambda: self.supprimer_session(sid))
         menu.tk_popup(event.x_root, event.y_root)
@@ -6321,7 +6476,7 @@ class AppEcriture(tk.Tk):
 
     # ---------- Le menu Fichier ----------
     def ouvrir_menu_fichier(self):
-        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
                        activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
         menu.add_command(label="➕  Créer un fichier…", command=self.creer_fichier)
         menu.add_separator()
@@ -6443,7 +6598,7 @@ class AppEcriture(tk.Tk):
             texte, fond = "\U0001f507  Voix", GRIS_INACTIF
         for bouton in list(self.boutons_voix):
             try:
-                bouton.config(text=texte, bg=fond)
+                bouton.config(text=texte, bg=fond, fg=texte_sur(fond))
             except tk.TclError:
                 self.boutons_voix.remove(bouton)     # son écran a été fermé
 
@@ -6491,11 +6646,11 @@ class AppEcriture(tk.Tk):
     # ---------- Les pouvoirs magiques ----------
     def construire_menu_magie(self):
         """Le menu ✨ Magie : les pouvoirs qui roulent sur ton ordi, gratuitement."""
-        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+        menu = tk.Menu(self, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
                        activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
         menu.add_command(label="✨  Continuer mon texte", command=self.magie_continuer)
         menu.add_command(label="\U0001fa84  Corriger les fautes", command=self.magie_corriger)
-        styles = tk.Menu(menu, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+        styles = tk.Menu(menu, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
                          activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
         for cle, nom, _ in STYLES:
             styles.add_command(label=nom, command=lambda c=cle: self.magie_style(c))
@@ -6505,7 +6660,7 @@ class AppEcriture(tk.Tk):
         menu.add_command(label="\U0001f3a4  Dicter", command=self.magie_dicter)
         menu.add_command(label="\u23f9  Arrêter la lecture" if self.voix.parle else
                                "\U0001f50a  Lire à voix haute", command=self.magie_lire)
-        traduire = tk.Menu(menu, tearoff=0, bg=GRIS_ZONE, fg=NOIR, activebackground=ORANGE,
+        traduire = tk.Menu(menu, tearoff=0, bg=GRIS_ZONE, fg=TEXTE, activebackground=ORANGE,
                            activeforeground=NOIR, font=(FAMILLE, 11), bd=0, relief="flat")
         traduire.add_command(label="Français → English",
                              command=lambda: self.magie_traduire("fr", "en"))

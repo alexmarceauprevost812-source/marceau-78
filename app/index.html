@@ -7,6 +7,14 @@
 <meta name="description" content="Marceau dans le navigateur : IA gratuites sur ton ordi avec Ollama, ou Claude avec ta propre clé.">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#8c8c8c">
+<script>/* Le mode nuit avant le premier dessin : sinon l'écran flasherait en gris */
+try {
+  if (localStorage.getItem("ecriture.nuit") === "oui") {
+    document.documentElement.dataset.theme = "nuit";
+    document.querySelector('meta[name="theme-color"]').content = "#000000";
+  }
+} catch (e) { /* navigation privée */ }
+</script>
 <link rel="icon" href="/logo_64.png">
 <link rel="apple-touch-icon" href="/logo_accueil.png">
 <link rel="manifest" href="/app/manifest.webmanifest">
@@ -25,6 +33,7 @@
       <button class="mode actif" id="nav-chat"><span class="pic">✎</span> Chat</button>
       <button class="mode" id="nav-codex"><span class="pic">▤</span> Codex</button>
       <button class="mode" id="nav-param"><span class="pic">⚙</span> Paramètres</button>
+      <button class="mode" id="nav-nuit"><span class="pic" id="nuit-pic">☾</span> <span id="nuit-texte">Mode nuit</span></button>
     </nav>
     <hr class="trait">
     <button class="bouton" id="nouveau-menu">+ Nouvelle conversation</button>

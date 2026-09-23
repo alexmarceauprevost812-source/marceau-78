@@ -827,6 +827,21 @@ de macOS ou d'Android, selon l'appareil.
 Seul le **PDF** garde Helvetica : c'est la police intégrée au format, celle qui
 s'affiche pareil partout sans rien embarquer dans le fichier.
 
+## Le mode nuit
+
+Dans le menu ☰, **☾ Mode nuit** met l'écran **tout noir**, pis le texte en
+**vert lime**. Les boutons gardent **le même orange**, avec leur texte noir pour
+bien se lire. Un autre clic sur **☼ Mode jour** ramène le gris mat.
+
+Ça marche partout : le chat, le Codex, les cartes de fichiers, les schémas, la
+météo, les fenêtres pis les menus. Marceau s'en souvient pis se rouvre dans le
+même mode : sur l'ordi, c'est gardé dans `~/.config/ecriture/reglages.json`;
+sur le web, dans ton navigateur. Sur le web, la page est noire dès
+l'ouverture (pas de flash gris), pis la barre du téléphone devient noire aussi.
+
+Pour changer les couleurs de nuit : en haut d'`ecriture.py` (`VERT_NUIT`,
+`FONDS_NUIT`, `TEXTES_NUIT`) pis à la fin d'`app/ecriture.css`.
+
 ## Personnaliser
 
 Les couleurs, les polices et les proportions sont regroupées en haut de

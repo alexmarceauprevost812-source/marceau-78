@@ -54,12 +54,26 @@ const CLE_SESSIONS = "ecriture.sessions";
 const CLE_CLAUDE = "ecriture.cleClaude";
 const CLE_CODE = "ecriture.code";
 const CLE_MOTEUR = "ecriture.moteur";
+const CLE_NUIT = "ecriture.nuit";
 
 const lire = (cle) => { try { return localStorage.getItem(cle) || ""; } catch { return ""; } };
 const ecrire = (cle, valeur) => {
   try { valeur ? localStorage.setItem(cle, valeur) : localStorage.removeItem(cle); }
   catch { /* navigation privée */ }
 };
+
+/* ---------- Le mode nuit : écran tout noir, texte vert lime, boutons du même orange ---------- */
+// La page le met avant le premier dessin (un petit script dans <head>) : ici, on suit.
+const nuitActive = () => document.documentElement.dataset.theme === "nuit";
+function mettreNuit(nuit) {
+  if (nuit) document.documentElement.dataset.theme = "nuit";
+  else delete document.documentElement.dataset.theme;
+  const couleur = document.querySelector('meta[name="theme-color"]');
+  if (couleur) couleur.content = nuit ? "#000000" : "#8c8c8c";   // la barre du téléphone suit
+  $("#nuit-pic").textContent = nuit ? "☼" : "☾";
+  $("#nuit-texte").textContent = nuit ? "Mode jour" : "Mode nuit";
+  ecrire(CLE_NUIT, nuit ? "oui" : "");
+}
 
 /* ---------- Les consignes données à l'IA ---------- */
 const QUEBECOIS =
@@ -997,7 +1011,7 @@ function dessinerModelesGratuits(installes = []) {
 }
 
 /* ---------- L'app : s'installer, pis se tenir à jour ---------- */
-const VERSION_APP = "2.5.0";
+const VERSION_APP = "2.7.0";
 let inviteInstall = null;      // le navigateur nous prête son « Installer »
 let rechargeFaite = false;
 
@@ -1133,6 +1147,8 @@ $("#rafraichir-ollama").onclick = majOllama;
 $("#nav-chat").onclick = allerChat;
 $("#nav-codex").onclick = ouvrirCodex;
 $("#nav-param").onclick = () => allerPage("parametres");
+$("#nav-nuit").onclick = () => mettreNuit(!nuitActive());
+if (nuitActive()) mettreNuit(true);   // le bouton dit « Mode jour » dès l'ouverture
 $("#retour").onclick = () => allerPage("principale");
 $("#codex-fermer").onclick = fermerCodex;
 

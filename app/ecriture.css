@@ -222,7 +222,7 @@ button { font: inherit; color: inherit; }
 .etape.allumee { border-color: var(--lime); }
 .numero {
   flex: none; width: 30px; height: 30px; border-radius: 50%;
-  background: var(--orange); color: var(--noir);
+  background: var(--orange); color: #000;     /* noir sur l'orange, même la nuit */
   display: grid; place-items: center; font-weight: 700; font-size: .82rem;
 }
 .lien { position: relative; height: 44px; width: 3px; margin: 0 auto; background: var(--gris-lien); }
@@ -513,3 +513,47 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   padding: 10px 18px; font-size: .86rem; font-weight: 700;
   box-shadow: 0 4px 14px #0003;
 }
+
+/* ---------- Mode nuit : écran tout noir, texte vert lime, boutons du même orange ---------- */
+:root[data-theme="nuit"] {
+  --gris-fond: #000;
+  --gris-zone: #000;
+  --gris-menu: #000;
+  --gris-boite: #0f0f0f;
+  --gris-bord: #333;
+  --gris-lien: #404040;
+  --noir: #7fff00;          /* le texte : vert lime */
+  color-scheme: dark;
+}
+/* Sur l'orange, le texte reste noir, de jour comme de nuit */
+.bouton, .mode.actif, .session.active, .moteur, .modeles li.installe,
+.codex-onglet.actif, .codex-fichier.actif, .annonce { color: #000; }
+[data-theme="nuit"] .bouton.voix.coupee { color: var(--noir); }
+[data-theme="nuit"] .mode { background: #1a1a1a; }
+[data-theme="nuit"] .mode:hover { background: #262626; }
+[data-theme="nuit"] .mode.actif { background: var(--orange); }
+[data-theme="nuit"] .session:hover,
+[data-theme="nuit"] .codex-projet-ligne:hover,
+[data-theme="nuit"] .codex-fichier:hover { background: #1f1f1f; }
+[data-theme="nuit"] .session.active,
+[data-theme="nuit"] .codex-fichier.actif { background: var(--orange); }
+[data-theme="nuit"] .etat,
+[data-theme="nuit"] .modeles li,
+[data-theme="nuit"] .codex-travaux:not(:empty) { background: #141414; }
+[data-theme="nuit"] .modeles li.installe { background: var(--orange); }
+[data-theme="nuit"] .codex-onglet { background: #1a1a1a; }
+[data-theme="nuit"] .codex-onglet.actif { background: var(--orange); }
+[data-theme="nuit"] .etat.oui,
+[data-theme="nuit"] .codex-etat.bien { color: #a6ff4d; }
+[data-theme="nuit"] .etat.non,
+[data-theme="nuit"] .codex-etat.mal,
+[data-theme="nuit"] .codex-geste.mal { color: #ff8a80; }
+[data-theme="nuit"] .menu,
+[data-theme="nuit"] .codex-barre,
+[data-theme="nuit"] .codex-choix .dedans { border-color: #333; }
+[data-theme="nuit"] .trait { border-top-color: #333; }
+[data-theme="nuit"] .session button:hover,
+[data-theme="nuit"] .codex-onglet .x:hover,
+[data-theme="nuit"] .fermer:hover { background: #ffffff26; }
+[data-theme="nuit"] .bouton:focus-visible,
+[data-theme="nuit"] .mode:focus-visible { outline-color: var(--noir); }
