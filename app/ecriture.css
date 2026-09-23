@@ -283,6 +283,16 @@ button { font: inherit; color: inherit; }
   .barre { top: 12px; right: 12px; gap: 6px; }
   .barre .bouton { padding: 7px 11px; font-size: .78rem; }
   .astuce { display: none; }
+  /* Sur un téléphone : un « Envoyer » petit pis mince, en bas à droite de la boîte,
+     pis la place qu'il laisse va à la boîte où tu écris (plus large, plus haute). */
+  .rangee { gap: 8px; }
+  .rangee .bouton {
+    align-self: flex-end;
+    padding: 9px 13px;
+    font-size: .82rem;
+    border-radius: var(--r-bouton);
+  }
+  .boite { min-height: 104px; }
 }
 
 /* ---------- Réglages (page 2 du menu) ---------- */
@@ -504,6 +514,14 @@ select.moteur:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   .codex-barre .fermer { position: absolute; top: 6px; right: 8px; }
   .codex-etat { order: 10; flex-basis: 100%; }
   .codex-nom { font-size: .8rem; }
+  /* Pareil que le chat : un « Envoyer » petit, pis plus de place pour écrire */
+  .codex-rangee { gap: 8px; }
+  .codex-rangee .bouton {
+    align-self: flex-end;
+    padding: 9px 13px;
+    font-size: .82rem;
+    border-radius: var(--r-bouton);
+  }
 }
 
 /* ---------- L'annonce de mise à jour ---------- */

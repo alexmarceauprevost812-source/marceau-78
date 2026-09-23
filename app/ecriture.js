@@ -1011,7 +1011,7 @@ function dessinerModelesGratuits(installes = []) {
 }
 
 /* ---------- L'app : s'installer, pis se tenir à jour ---------- */
-const VERSION_APP = "2.7.0";
+const VERSION_APP = "2.7.1";
 let inviteInstall = null;      // le navigateur nous prête son « Installer »
 let rechargeFaite = false;
 
