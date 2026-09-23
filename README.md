@@ -694,6 +694,28 @@ Quand une nouvelle version arrive pendant que l'app est ouverte, elle prend la
 place tout de suite (`skipWaiting`), le bandeau te le dit, et la page se
 recharge une seule fois.
 
+## La police de ton système
+
+Marceau écrit avec **la même police que ton ordi**. Au démarrage, elle la
+demande au système, dans cet ordre :
+
+1. **GNOME, Ubuntu, Cinnamon, Budgie** — `gsettings` (la police de l'interface,
+   pis celle du code) ;
+2. **KDE** — `~/.config/kdeglobals` ;
+3. **partout ailleurs** — `fc-match sans-serif` et `fc-match monospace`.
+
+Elle prend la première que Tkinter connaît pour vrai ; une police annoncée
+mais pas installée est sautée. Tout suit : le texte, les boutons, les menus,
+les fenêtres de dialogue, l'éditeur du Codex (avec la police de code du
+système), pis le texte que le Studio écrit sur les images. Si rien ne répond,
+c'est `DejaVu Sans`, qui est sur presque tous les Linux.
+
+La version web fait pareil avec `system-ui` : la police d'Ubuntu, de Windows,
+de macOS ou d'Android, selon l'appareil.
+
+Seul le **PDF** garde Helvetica : c'est la police intégrée au format, celle qui
+s'affiche pareil partout sans rien embarquer dans le fichier.
+
 ## Personnaliser
 
 Les couleurs, les polices et les proportions sont regroupées en haut de
@@ -701,7 +723,9 @@ Les couleurs, les polices et les proportions sont regroupées en haut de
 
 - `GRIS_FOND`, `GRIS_ZONE`, `GRIS_BORD`, `NOIR`, `ORANGE`, `ORANGE_FONCE`
 - `LIME`, `LIME_LUEUR`, `GRIS_BOITE`, `GRIS_LIEN` — les couleurs des schémas
-- `FAMILLE`, `POLICE`, `POLICE_BOUTON`, `POLICE_INVITE`
+- `POLICE_PERSO`, `POLICE_CODE_PERSO` — vides par défaut : l'app prend la police
+  de ton système (voir plus bas). Écris un nom de police pour en forcer une.
+- `FAMILLE`, `FAMILLE_CODE` — les polices de secours, si on n'en trouve aucune
 - `RAYON_BOUTON`, `RAYON_ZONE` — l'arrondi des coins, en pixels (0 = carré)
 - `MARGE` (espace sous la saisie), `LARGEUR` (largeur des zones, en fraction de
   la fenêtre), `HAUT_DOC` (hauteur à laquelle commence le document)

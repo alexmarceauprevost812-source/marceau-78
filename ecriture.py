@@ -53,7 +53,11 @@ LIME_LUEUR = "#92d253"     # halo autour du courant
 GRIS_BOITE = "#b8b8b8"     # boîtes des étapes
 GRIS_LIEN = "#6e6e6e"      # lignes entre les étapes (avant le courant)
 
-FAMILLE = "DejaVu Sans"
+# La police : celle de ton système (Ubuntu, GNOME, KDE…), trouvée au démarrage.
+# Pour en forcer une autre, écris son nom ici (ex. : "Noto Sans"). Vide = celle du système.
+POLICE_PERSO = ""
+POLICE_CODE_PERSO = ""
+FAMILLE = "DejaVu Sans"             # si on trouve rien : celle-là, qui est sur presque tous les Linux
 FAMILLE_CODE = "DejaVu Sans Mono"
 POLICE = (FAMILLE, 14)
 POLICE_BOUTON = (FAMILLE, 11, "bold")
@@ -129,7 +133,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 HEURES_MAJ = 6         # on revérifie les mises à jour aux 6 heures, même si l'app reste ouverte
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
@@ -1315,7 +1319,9 @@ def couleur_dans(mots, defaut):
 
 
 def police_texte(taille):
-    for chemin in POLICES_TEXTE:
+    for chemin in [fichier_police_systeme()] + POLICES_TEXTE:
+        if not chemin:
+            continue
         try:
             return ImageFont.truetype(chemin, taille)
         except Exception:
@@ -2718,6 +2724,100 @@ class SchemaAnime(tk.Canvas):
             self.after(self.PAS_MS, self.animer)
         except tk.TclError:
             return   # le schéma a été effacé
+
+
+# ---------- La police du système ----------
+STYLES_POLICE = {"bold", "italic", "oblique", "regular", "medium", "light", "semibold", "semi-bold",
+                 "book", "normal", "condensed", "thin", "heavy", "black", "extrabold", "extralight"}
+
+
+def _famille_de(nom_complet):
+    """« 'Ubuntu Sans Bold 11' » (comme gsettings l'écrit) → « Ubuntu Sans »."""
+    nom = nom_complet.strip().strip("'\"")
+    nom = re.sub(r"\s+\d+(?:\.\d+)?$", "", nom)          # la taille, à la fin
+    mots = nom.split()
+    while len(mots) > 1 and mots[-1].lower() in STYLES_POLICE:
+        mots.pop()                                    # « Bold », « Italic »… à la fin
+    return " ".join(mots)
+
+
+def _sortie(commande):
+    """Ce qu'une commande répond, ou "" si elle existe pas ou se plaint."""
+    try:
+        r = subprocess.run(commande, capture_output=True, text=True, timeout=2)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def polices_du_systeme():
+    """Les polices de ton bureau, de la plus sûre à la moins sûre : (texte, code)."""
+    texte, code = [], []
+    # GNOME, Ubuntu, Cinnamon, Budgie, MATE récents : gsettings sait
+    if shutil.which("gsettings"):
+        for cle, liste in (("font-name", texte), ("monospace-font-name", code),
+                           ("document-font-name", texte)):
+            brut = _sortie(["gsettings", "get", "org.gnome.desktop.interface", cle])
+            if brut:
+                liste.append(_famille_de(brut))
+    # KDE : c'est écrit dans ~/.config/kdeglobals (« font=Noto Sans,10,… »)
+    kde = Path.home() / ".config" / "kdeglobals"
+    try:
+        for ligne in kde.read_text(errors="ignore").splitlines():
+            if ligne.startswith("font="):
+                texte.append(ligne[5:].split(",")[0].strip())
+            elif ligne.startswith("fixed="):
+                code.append(ligne[6:].split(",")[0].strip())
+    except OSError:
+        pass
+    # Partout ailleurs : fontconfig dit quelle police le système prend pour « sans-serif »
+    if shutil.which("fc-match"):
+        for motif, liste in (("sans-serif", texte), ("monospace", code)):
+            famille = _sortie(["fc-match", "-f", "%{family[0]}", motif])
+            if famille:
+                liste.append(famille)
+    return texte, code
+
+
+def choisir_polices(racine):
+    """Prend la police du système — si Tk la connaît pour vrai — pour toute l'app.
+
+    Ça doit rouler avant de bâtir la fenêtre : chaque morceau lit FAMILLE en se créant.
+    """
+    global FAMILLE, FAMILLE_CODE, POLICE, POLICE_BOUTON, POLICE_INVITE, POLICE_CODE
+    connues = {f.lower(): f for f in tkfont.families(racine)}
+    texte, code = polices_du_systeme()
+
+    def premiere(candidats, defaut):
+        for c in candidats:
+            if c and c.lower() in connues:
+                return connues[c.lower()]
+        return defaut
+
+    FAMILLE = premiere([POLICE_PERSO] + texte, FAMILLE)
+    FAMILLE_CODE = premiere([POLICE_CODE_PERSO] + code, FAMILLE_CODE)
+    POLICE, POLICE_BOUTON = (FAMILLE, 14), (FAMILLE, 11, "bold")
+    POLICE_INVITE, POLICE_CODE = (FAMILLE, 18), (FAMILLE_CODE, 12)
+    # Les polices de Tk lui-même suivent : les menus pis les petites fenêtres de dialogue
+    for nom in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont",
+                "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
+        try:
+            tkfont.nametofont(nom, root=racine).configure(family=FAMILLE)
+        except tk.TclError:
+            pass
+    try:
+        tkfont.nametofont("TkFixedFont", root=racine).configure(family=FAMILLE_CODE)
+    except tk.TclError:
+        pass
+    return FAMILLE, FAMILLE_CODE
+
+
+def fichier_police_systeme():
+    """Le fichier de la police du système, en gras : pour écrire sur les images du Studio."""
+    if not shutil.which("fc-match"):
+        return None
+    chemin = _sortie(["fc-match", "-f", "%{file}", f"{FAMILLE}:bold"])
+    return chemin if chemin and Path(chemin).is_file() else None
 
 
 # ---------- Petits morceaux d'interface ----------
@@ -4195,6 +4295,7 @@ class CodexVue(tk.Frame):
 class AppEcriture(tk.Tk):
     def __init__(self):
         super().__init__()
+        choisir_polices(self)   # la police du système, avant de bâtir la moindre affaire
         self.title("Marceau")
         self.geometry("1100x720")
         self.minsize(960, 560)

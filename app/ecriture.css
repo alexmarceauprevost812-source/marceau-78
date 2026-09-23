@@ -31,7 +31,9 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
 body {
   background: var(--gris-fond);
   color: var(--noir);
-  font: 16px/1.5 "DejaVu Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* La police de ton système d'abord (Ubuntu, Windows, macOS, Android…), DejaVu en dernier recours */
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Ubuntu, Cantarell, "Noto Sans", Roboto,
+        "DejaVu Sans", sans-serif;
   -webkit-text-size-adjust: 100%;
 }
 button { font: inherit; color: inherit; }
