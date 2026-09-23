@@ -9,6 +9,7 @@
 import base64
 import datetime
 import difflib
+import http.server
 import io
 import json
 import math
@@ -133,7 +134,7 @@ FICHIER_MAJ = DOSSIER_CONFIG / "maj_auto"      # "non" dedans = tu as coupé l'a
 # ---------- Mises à jour ----------
 # L'app va se chercher elle-même sur GitHub. Un seul lien, écrit en dur : elle ne
 # téléchargera jamais rien d'ailleurs, même si un fichier de config disait le contraire.
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 HEURES_MAJ = 6         # on revérifie les mises à jour aux 6 heures, même si l'app reste ouverte
 URL_MAJ = ("https://raw.githubusercontent.com/alexmarceauprevost812-source/"
            "marceau-78/refs/heads/claude/bold-gates-5onh76/ecriture.py")
@@ -208,6 +209,17 @@ def instructions_systeme(web):
         "couleur, bordure N couleur, vignette X (0 à 1), chaud, froid, pixeliser N, posteriser N. "
         "Les modifications se font sur la dernière image de la conversation. Si on te pose juste "
         "une question sur une image, réponds sans bloc. "
+    )
+    texte += (
+        "Pouvoir spécial, le Studio d'applications : si on te demande de construire une petite "
+        "application, un jeu, un outil, une calculatrice, une page web ou n'importe quoi qui s'ouvre "
+        "dans un navigateur, écris-la AU COMPLET dans UN SEUL fichier HTML — le CSS dans <style>, le "
+        "JavaScript dans <script>, sans image ni librairie à aller chercher sur Internet si tu peux "
+        "t'en passer — dans un bloc exactement comme celui-ci :\n"
+        "[APP Titre court de l'app]\n<!DOCTYPE html>\n…\n[/APP]\n"
+        "Avant le bloc, dis en deux ou trois phrases ce que fait l'app pis comment s'en servir. "
+        "Pour changer une app déjà faite, réécris-la au complet dans un nouveau bloc [APP] avec le "
+        "MÊME titre : elle se met à jour toute seule dans le Studio. "
     )
     texte += (
         "Quand ta réponse explique un plan d'action ou des étapes à suivre, termine-la "
@@ -1800,6 +1812,7 @@ def texte_pour_voix(texte):
     texte = re.sub(r"```.*?(```|$)", " ", texte or "", flags=re.S)
     texte = re.sub(r"\[(PLAN|STUDIO|LIRE)\].*?(\[/\1\]|$)", " ", texte, flags=re.S | re.I)
     texte = re.sub(r"\[FICHIER[^\]]*\].*?(\[/FICHIER\]|$)", " ", texte, flags=re.S | re.I)
+    texte = re.sub(r"\[APP[^\]]*\].*?(\[/APP\]|$)", " ", texte, flags=re.S | re.I)
     texte = re.sub(r"\[(M[ÉE]T[ÉE]O|IMAGE)[^\]]*\]", " ", texte, flags=re.I)
     texte = URL_WEB.sub(" ", texte)                   # « h t t p s deux-points… » : non merci
     texte = re.sub(r"`([^`]*)`", r"\1", texte)
@@ -2580,6 +2593,237 @@ class FenetreFichier(tk.Toplevel):
             return
         self.app.fichier_cree(chemin)
         self.destroy()
+
+
+# ---------- Le Studio d'applications : l'IA construit une petite app, pis tu la vois ----------
+def extraire_app(texte):
+    """Sort l'app HTML d'une réponse. Rend (texte sans l'app, {"titre", "html"} ou None).
+
+    D'abord le bloc [APP titre]…[/APP] demandé dans les consignes; sinon un ```html avec une
+    vraie page dedans; sinon une page <!DOCTYPE html>…</html> écrite telle quelle.
+    """
+    m = re.search(r"\[APP(?:[ \t:\-]+([^\]\n]*))?\][ \t]*\n?(.*?)(?:\[/APP\]|$)", texte, re.S | re.I)
+    if m:
+        titre, html = (m.group(1) or "").strip(), m.group(2)
+    else:
+        m = re.search(r"```(?:html|htm)?[ \t]*\n(.*?)(?:```|$)", texte, re.S | re.I)
+        if m and re.search(r"<(!doctype|html|body)\b", m.group(1), re.I):
+            titre, html = "", m.group(1)
+        else:
+            m = re.search(r"<!doctype html.*?(?:</html>|$)", texte, re.S | re.I)
+            if not m:
+                return texte, None
+            titre, html = "", m.group(0)
+    reste = (texte[:m.start()] + texte[m.end():]).strip()
+    html = re.sub(r"^\s*```[\w-]*[ \t]*\n", "", html)        # des ``` que l'IA aurait mis dans le bloc
+    html = re.sub(r"\n\s*```\s*$", "", html).strip()
+    if not re.search(r"<[a-z!]", html, re.I):
+        return texte, None                                     # un bloc sans HTML dedans : c'est pas une app
+    if not titre:
+        t = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+        titre = re.sub(r"\s+", " ", t.group(1)).strip() if t else ""
+    return reste, {"titre": (titre or "Mon app")[:60], "html": html + "\n"}
+
+
+def identifiant_app(titre):
+    """« Mon Jeu de Tic-Tac-Toé! » → « mon-jeu-de-tic-tac-toe » : l'adresse de l'app dans l'aperçu."""
+    return re.sub(r"[^a-z0-9]+", "-", sans_accents(titre)).strip("-")[:40] or "app"
+
+
+class ApercuApps:
+    """Le serveur d'aperçu : chaque app du Studio a son adresse sur ton ordi.
+
+    Il écoute seulement sur 127.0.0.1 : personne d'autre peut s'y connecter. Quand l'IA
+    refait une app (même titre), l'onglet déjà ouvert dans ton navigateur se recharge tout seul.
+    """
+    # Glissé à la fin de la page : il regarde aux 0,8 s si l'app a une nouvelle version
+    RECHARGE = ("<script>/* Aperçu Marceau : se recharge tout seul quand l'IA refait l'app */"
+                "(function(){{var v={version};setInterval(function(){{"
+                "fetch('/v/{ident}',{{cache:'no-store'}}).then(function(r){{return r.json();}})"
+                ".then(function(n){{if(n.version!==v)location.reload();}}).catch(function(){{}});"
+                "}},800);}})();</script>")
+
+    def __init__(self):
+        self.apps = {}              # identifiant -> {"titre", "html", "version"}
+        self.verrou = threading.Lock()
+        self.serveur = None
+
+    def publier(self, titre, html):
+        """Met une app (ou sa nouvelle version) en ligne. Rend (identifiant, version)."""
+        ident = identifiant_app(titre)
+        with self.verrou:
+            vieille = self.apps.get(ident)
+            if vieille is None:
+                version = 1
+            elif vieille["html"] == html:
+                version = vieille["version"]          # la même : pas besoin de recharger
+            else:
+                version = vieille["version"] + 1
+            self.apps[ident] = {"titre": titre, "html": html, "version": version}
+        self.demarrer()
+        return ident, version
+
+    def adresse(self, ident):
+        self.demarrer()
+        return f"http://127.0.0.1:{self.serveur.server_address[1]}/a/{ident}"
+
+    def page(self, ident):
+        with self.verrou:
+            app = self.apps.get(ident)
+        if app is None:
+            return None
+        script = self.RECHARGE.format(version=app["version"], ident=ident)
+        html = app["html"]
+        fin = html.lower().rfind("</body>")
+        return html[:fin] + script + html[fin:] if fin >= 0 else html + script
+
+    def version(self, ident):
+        with self.verrou:
+            app = self.apps.get(ident)
+        return None if app is None else app["version"]
+
+    def demarrer(self):
+        if self.serveur is not None:
+            return
+        apercu = self
+
+        class Gestion(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                morceaux = self.path.split("?")[0].strip("/").split("/")
+                if len(morceaux) == 2 and morceaux[0] == "a":
+                    page = apercu.page(morceaux[1])
+                    if page is not None:
+                        return self.envoyer(200, "text/html; charset=utf-8", page.encode("utf-8"))
+                if len(morceaux) == 2 and morceaux[0] == "v":
+                    version = apercu.version(morceaux[1])
+                    if version is not None:
+                        return self.envoyer(200, "application/json",
+                                            json.dumps({"version": version}).encode("utf-8"))
+                self.envoyer(404, "text/plain; charset=utf-8", "Pas d'app ici.".encode("utf-8"))
+
+            def envoyer(self, code, sorte, corps):
+                self.send_response(code)
+                self.send_header("Content-Type", sorte)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(corps)))
+                self.end_headers()
+                self.wfile.write(corps)
+
+            def log_message(self, *args):
+                pass            # pas de journal dans le terminal à chaque rechargement
+
+        self.serveur = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Gestion)
+        self.serveur.daemon_threads = True
+        threading.Thread(target=self.serveur.serve_forever, daemon=True).start()
+
+    def arreter(self):
+        if self.serveur is not None:
+            self.serveur.shutdown()
+            self.serveur.server_close()
+            self.serveur = None
+
+
+class StudioApp(tk.Frame):
+    """Le Studio d'une app : son code qui s'écrit sous tes yeux, pis de quoi la voir, la garder, l'envoyer."""
+    LIGNES = 14            # hauteur du code dans la carte (après, ça défile)
+    TAILLE = 10
+
+    def __init__(self, parent, app, titre, html, ident, version, largeur, anime=True, fini=None):
+        super().__init__(parent, bg=GRIS_BOITE, highlightthickness=2, highlightbackground=ORANGE)
+        self.app, self.titre, self.html, self.ident = app, titre, html, ident
+        haut = tk.Frame(self, bg=GRIS_BOITE)
+        haut.pack(fill="x", padx=12, pady=(10, 6))
+        tk.Label(haut, text="Studio", bg=GRIS_BOITE, fg=NOIR, font=(FAMILLE, 14, "bold")).pack(side="left")
+        lignes = html.count("\n") or 1
+        details = (f"{titre}" + (f"  ·  version {version}" if version > 1 else "")
+                   + f"  ·  {lignes} lignes  ·  {taille_lisible(len(html.encode('utf-8')))}")
+        tk.Label(haut, text=details, bg=GRIS_BOITE, fg="#2e2e2e", font=(FAMILLE, 10), anchor="w",
+                 justify="left", wraplength=max(largeur - 140, 200)).pack(side="left", padx=(12, 0))
+
+        cadre = tk.Frame(self, bg=CODE_FOND, width=largeur - 28)
+        cadre.pack(fill="x", padx=12)
+        hauteur = min(self.LIGNES, max(4, lignes + 1))   # une petite app : un petit cadre
+        self.code = tk.Text(cadre, height=hauteur, width=1, wrap="none", bg=CODE_FOND, fg=CODE_TEXTE,
+                            font=(FAMILLE_CODE, self.TAILLE), relief="flat", bd=0, highlightthickness=0,
+                            padx=10, pady=6, insertwidth=0, selectbackground=CODE_SELECTION,
+                            selectforeground="#ffffff")
+        defil = barre_defilement(cadre, "vertical", CODE_FOND, command=self.code.yview)
+        self.code.config(yscrollcommand=defil.set)
+        defil.pack(side="right", fill="y")
+        self.code.pack(side="left", fill="both", expand=True)
+        for etiquette, (couleur, style) in COULEURS_CODE.items():
+            self.code.tag_configure(etiquette, foreground=couleur,
+                                    font=(FAMILLE_CODE, self.TAILLE, style) if style else (FAMILLE_CODE, self.TAILLE))
+        tk.Frame(self, width=largeur, height=0, bg=GRIS_BOITE).pack()   # fixe la largeur de la carte
+
+        boutons = tk.Frame(self, bg=GRIS_BOITE)
+        boutons.pack(fill="x", padx=12, pady=(8, 12))
+        bouton_orange(boutons, "\u25b6  Voir l'app", self.voir, taille=9).pack(side="left")
+        self.etat = tk.Label(boutons, text="", bg=GRIS_BOITE, fg="#2e2e2e", font=(FAMILLE, 9), anchor="w")
+        self.etat.pack(side="left", padx=10)
+        bouton_orange(boutons, "Mettre dans le Codex", self.vers_codex, taille=9).pack(side="right")
+        bouton_orange(boutons, "Enregistrer", self.enregistrer, taille=9).pack(side="right", padx=(0, 8))
+
+        if anime:
+            self.etat.config(text="L'app se construit…")
+            self.after(10, lambda: self.ecrire(fini))
+        else:
+            self.code.insert("1.0", html)
+            self.colorer()
+            self.code.config(state="disabled")
+
+    def colorer(self):
+        texte = self.code.get("1.0", "end-1c")[:120_000]
+        for etiquette in COULEURS_CODE:
+            self.code.tag_remove(etiquette, "1.0", "end")
+        departs = [0] + [m.end() for m in re.finditer("\n", texte)]
+        for a, b, etiquette in jetons(texte, "html"):
+            la, lb = bisect_right(departs, a) - 1, bisect_right(departs, b) - 1
+            self.code.tag_add(etiquette, f"{1 + la}.{a - departs[la]}", f"{1 + lb}.{b - departs[lb]}")
+
+    def ecrire(self, fini=None):
+        """Le code s'écrit en direct, vite, avec les couleurs qui suivent : on voit l'app se construire."""
+        html = self.html
+        tours = max(1, int(DUREE_CODE * 1000 / VITESSE_MS))
+        paquet = max(1, -(-len(html) // tours))
+        etat = {"position": 0, "tic": 0}
+
+        def tour():
+            try:
+                if not self.code.winfo_exists():
+                    return
+                morceau = html[etat["position"]:etat["position"] + paquet]
+                if morceau:
+                    self.code.insert("end", morceau)
+                    etat["position"] += paquet
+                    etat["tic"] += 1
+                    self.code.see("end")
+                    if etat["tic"] % 10 == 0:
+                        self.colorer()
+                    self.code.after(VITESSE_MS, tour)
+                    return
+                self.colorer()
+                self.code.see("1.0")
+                self.code.config(state="disabled")
+                self.etat.config(text="")
+                if fini:
+                    fini()
+            except tk.TclError:
+                return       # la carte a été effacée pendant que ça s'écrivait
+
+        tour()
+
+    def voir(self):
+        self.app.voir_app(self.ident)
+        self.etat.config(text="Ouverte dans ton navigateur. Elle se met à jour toute seule.")
+
+    def enregistrer(self):
+        chemin = self.app.enregistrer_app(self.titre, self.html)
+        if chemin:
+            self.etat.config(text=f"Enregistrée : {Path(chemin).name}")
+
+    def vers_codex(self):
+        self.app.app_dans_codex(self.titre, self.html)
 
 
 # ---------- Moteur de schéma ----------
@@ -4323,6 +4567,8 @@ class AppEcriture(tk.Tk):
         self.voix_active = lire_reglages().get("voix", True)   # l'IA lit ses réponses à voix haute
         self.voix_avertie = False    # on explique une seule fois comment avoir une voix
         self.voix = Voix(sur_changement=lambda: self.depuis_fil(self.maj_boutons_voix))
+        self.apercu = ApercuApps()   # les apps du Studio, visibles dans ton navigateur
+        self.apps_ouvertes = set()   # celles déjà ouvertes : la prochaine version recharge l'onglet
         self.schemas = []
         self.question_en_cours = ""
         self.menu_ouvert = False
@@ -5077,6 +5323,8 @@ class AppEcriture(tk.Tk):
                     self.ajouter_meteo(m["meteo"])   # la météo d'astheure, en direct
                 if m.get("studio") and Image is not None:
                     self.remontrer_studio(m["studio"])
+                if m.get("app"):
+                    self.ajouter_app(m["app"], m, anime=False)
         self.document.see("end")
         if self.logo and dernier:
             self.update_idletasks()
@@ -5106,8 +5354,16 @@ class AppEcriture(tk.Tk):
 
     def historique_api(self):
         historique = []
-        for m in self.messages:
-            message = {"role": m["role"], "content": m["content"]}
+        # L'IA doit revoir le code de sa DERNIÈRE app pour la modifier (« fais-le plus gros »).
+        # Les plus vieilles sont juste nommées : pas besoin de repayer leur code à chaque message.
+        derniere_app = max((i for i, m in enumerate(self.messages) if m.get("app")), default=None)
+        for i, m in enumerate(self.messages):
+            contenu = m["content"]
+            if m.get("app"):
+                app = m["app"]
+                contenu += (f"\n[APP {app['titre']}]\n{app['html']}[/APP]" if i == derniere_app
+                            else f"\n(L'app « {app['titre']} » était ici.)")
+            message = {"role": m["role"], "content": contenu}
             if m.get("images"):
                 message["images_chemins"] = m["images"]
             historique.append(message)
@@ -5146,6 +5402,7 @@ class AppEcriture(tk.Tk):
                                                   "pas enregistrés.\nQuitter quand même?"):
                 return
         self.voix.taire()      # sinon la voix du système continue de parler, l'app fermée
+        self.apercu.arreter()
         self.destroy()
 
     # ---------- Positions ----------
@@ -5235,7 +5492,7 @@ class AppEcriture(tk.Tk):
                 historique = preparer_historique(historique, voit)
             if type_moteur == "claude":
                 texte, sources = appeler_claude(cle, historique, instructions_systeme(web=True),
-                                                modele=modele)
+                                                max_tokens=16000, timeout=600, modele=modele)
             else:
                 texte, sources = appeler_ollama(modele, historique, instructions_systeme(web=False))
             self.resultats.put((generation, "ok", texte, sources, avis))
@@ -5261,10 +5518,12 @@ class AppEcriture(tk.Tk):
         continuer = lambda: generation == self.generation
 
         if statut == "ok":
+            texte, app = extraire_app(texte)     # d'abord : son code pourrait ressembler à un plan
             texte, etapes = extraire_plan(texte, self.question_en_cours)
             texte, lieu_meteo = extraire_meteo(texte, self.question_en_cours)
             texte, operations = extraire_studio(texte)
             texte = liens_markdown_en_texte(texte) or (
+                "Voilà ton app :" if app else
                 "Voici la météo :" if lieu_meteo is not None else "Voici le plan :" if etapes else
                 "Voilà ton image :" if operations else
                 "Pas de réponse cette fois-ci. Reformule ta question.")
@@ -5283,6 +5542,8 @@ class AppEcriture(tk.Tk):
                     self.document.insert("end", avis + "\n", "sources")
                 if operations or avait_image:
                     self.ajouter_studio(operations, reponse)
+                if app:
+                    self.ajouter_app(app, reponse)
                 self.fin_reponse(index)
                 self.dire_a_voix_haute(texte)
 
@@ -5968,6 +6229,67 @@ class AppEcriture(tk.Tk):
         self.dire_magie(f"Image gardée dans « {nom} » : {fichier}")
         if rappel:
             rappel(nom)
+
+    # ---------- Le Studio d'applications ----------
+    def ajouter_app(self, app, reponse, anime=True):
+        """Une app construite par l'IA : sa carte dans la conversation, pis son aperçu dans le navigateur."""
+        titre, html = app["titre"], app["html"]
+        ident, version = self.apercu.publier(titre, html)
+        if anime:
+            reponse["app"] = {"titre": titre, "html": html}      # gardée avec la conversation
+            self.sauver_session()
+        largeur = max(self.document.winfo_width() - 60, 460)
+        carte = None
+
+        def construite():
+            # La 1re fois, l'app s'ouvre toute seule. Après, l'onglet déjà ouvert se recharge.
+            if ident not in self.apps_ouvertes:
+                self.voir_app(ident)
+                carte.etat.config(text="Ouverte dans ton navigateur.")
+            else:
+                carte.etat.config(text="L'aperçu ouvert vient de se mettre à jour tout seul.")
+
+        carte = StudioApp(self.document, self, titre, html, ident, version, largeur, anime=anime,
+                          fini=construite if anime else None)
+        self.schemas.append(carte)     # effacée avec la conversation
+        self.document.window_create("end-1c", window=carte, pady=8)
+        self.document.insert("end", "\n")
+        self.document.see("end")
+        return carte
+
+    def voir_app(self, ident):
+        """Ouvre l'app dans ton navigateur (l'adresse est sur ton ordi seulement)."""
+        self.apps_ouvertes.add(ident)
+        adresse = self.apercu.adresse(ident)
+        try:
+            webbrowser.open(adresse)
+        except Exception as e:
+            messagebox.showinfo("Voir l'app", f"J'ai pas réussi à ouvrir ton navigateur : {e}\n\n"
+                                              f"Ouvre cette adresse à la main :\n{adresse}", parent=self)
+
+    def enregistrer_app(self, titre, html):
+        """Enregistre l'app en .html — par défaut avec tes autres fichiers (Fichier ▸ Mes fichiers)."""
+        DOSSIER_FICHIERS.mkdir(parents=True, exist_ok=True)
+        chemin = filedialog.asksaveasfilename(
+            title="Enregistrer l'app", parent=self, defaultextension=".html",
+            initialdir=str(DOSSIER_FICHIERS), initialfile=identifiant_app(titre) + ".html",
+            filetypes=[("Page web", "*.html"), ("Tous les fichiers", "*.*")])
+        if not chemin:
+            return None
+        Path(chemin).write_text(html, encoding="utf-8")
+        return chemin
+
+    def app_dans_codex(self, titre, html):
+        """L'app devient un fichier de ton projet GitHub (index.html par défaut)."""
+        chemin = simpledialog.askstring("Mettre dans le Codex", "Chemin du fichier dans le projet :",
+                                        initialvalue="index.html", parent=self)
+        if not chemin or not chemin.strip():
+            return
+        chemin = chemin.strip().lstrip("/")
+        self.ouvrir_codex()
+        self.codex.appliquer_fichier(chemin, html)
+        self.codex.ouvrir_editeur()
+        self.codex.etat(f"{chemin} est prêt. Clique « Enregistrer » pour l'envoyer sur GitHub.")
 
     # ---------- Le Studio ----------
     def ajouter_studio(self, operations, reponse):

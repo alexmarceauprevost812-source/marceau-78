@@ -488,6 +488,44 @@ support d'outils répondra quand même, mais sans se servir du projet.
 `Access-Control-Allow-Origin: *`, faque le navigateur l'appelle directement :
 le serveur du site ne voit ni ton token, ni ton code.
 
+## Le Studio d'applications : l'IA construit une petite app
+
+Demande au chat une petite application — « fais-moi un compteur », « un jeu de
+tic-tac-toe », « une calculatrice de pourboire » — pis regarde-la se construire.
+
+L'IA l'écrit au complet dans **un seul fichier HTML** (le CSS pis le JavaScript
+dedans), dans un bloc `[APP titre]…[/APP]`. L'app lit aussi un ` ```html ` ou une
+page `<!DOCTYPE html>` écrite telle quelle, parce que les modèles ne suivent pas
+toujours les consignes. La conversation garde l'explication ; le code, lui,
+s'en va dans une carte **Studio** :
+
+| | App de bureau | Version web |
+| --- | --- | --- |
+| Pendant que ça s'écrit | le code s'écrit sous tes yeux, en couleurs | l'app elle-même se construit, en direct, dans la carte |
+| Voir l'app | **▶ Voir l'app** l'ouvre dans ton navigateur (toute seule la 1re fois) | elle tourne dans la carte ; **⛶ Plein écran** pour la voir en grand |
+| La garder | **Enregistrer** — avec tes fichiers (Fichier ▸ Mes fichiers) | **⤓ Télécharger** |
+| Le reste | **Mettre dans le Codex** en fait le `index.html` de ton projet | **</> Code** montre son code |
+
+### Changer une app
+
+Dis-lui juste quoi changer : « fais-le plus gros », « mets-le en bleu ». L'IA
+revoit le code de **sa dernière app** pour le modifier (les plus vieilles sont
+seulement nommées, pour ne pas repayer leur code à chaque message), et la
+réécrit avec le même titre.
+
+Sur le bureau, **l'onglet déjà ouvert se recharge tout seul** : l'aperçu est
+servi par un petit serveur sur ton ordi (`127.0.0.1` seulement — personne
+d'autre peut s'y connecter), pis la page regarde aux 0,8 s si l'app a changé.
+
+### Ta sécurité
+
+Sur la version web, **ta clé Claude pis ton token GitHub sont gardés dans le
+navigateur**. Le code écrit par l'IA tourne donc dans un cadre isolé (un
+`iframe` `sandbox` **sans** `allow-same-origin`) : il a sa propre origine, vide,
+et ne peut pas les lire. **Plein écran** garde le même cadre isolé dans une
+fenêtre neuve, pis coupe le lien vers l'onglet de Marceau. Les tests vérifient
+qu'une app qui essaie de lire ta clé se fait bloquer, pour vrai.
+
 ## Le Studio : les images
 
 Le bouton **+ Image** sous la boîte joint jusqu'à 4 images à ta question

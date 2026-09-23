@@ -41,6 +41,15 @@ function instructionsSysteme() {
     "par un bloc exactement comme celui-ci (une étape courte par ligne, moins de 12 mots) :\n" +
     "[PLAN]\n1. Première étape\n2. Deuxième étape\n[/PLAN]\n" +
     "Ajoute ce bloc seulement s'il y a un vrai plan ou des étapes. " +
+    "Pouvoir spécial, le Studio d'applications : si on te demande de construire une petite " +
+    "application, un jeu, un outil, une calculatrice, une page web ou n'importe quoi qui " +
+    "s'ouvre dans un navigateur, écris-la AU COMPLET dans UN SEUL fichier HTML — le CSS dans " +
+    "<style>, le JavaScript dans <script>, sans image ni librairie à aller chercher sur " +
+    "Internet si tu peux t'en passer — dans un bloc exactement comme celui-ci :\n" +
+    "[APP Titre court de l'app]\n<!DOCTYPE html>\n…\n[/APP]\n" +
+    "Avant le bloc, dis en deux ou trois phrases ce que fait l'app pis comment s'en servir. " +
+    "Pour changer une app déjà faite, réécris-la au complet dans un nouveau bloc [APP] avec " +
+    "le MÊME titre. " +
     `Date d'aujourd'hui : ${aujourdhui}.`
   );
 }

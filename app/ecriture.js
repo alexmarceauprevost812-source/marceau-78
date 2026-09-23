@@ -85,6 +85,15 @@ function instructionsSysteme(web) {
     "par un bloc exactement comme celui-ci (une étape courte par ligne, moins de 12 mots) :\n" +
     "[PLAN]\n1. Première étape\n2. Deuxième étape\n[/PLAN]\n" +
     "Ajoute ce bloc seulement s'il y a un vrai plan ou des étapes. " +
+    "Pouvoir spécial, le Studio d'applications : si on te demande de construire une petite " +
+    "application, un jeu, un outil, une calculatrice, une page web ou n'importe quoi qui " +
+    "s'ouvre dans un navigateur, écris-la AU COMPLET dans UN SEUL fichier HTML — le CSS dans " +
+    "<style>, le JavaScript dans <script>, sans image ni librairie à aller chercher sur " +
+    "Internet si tu peux t'en passer — dans un bloc exactement comme celui-ci :\n" +
+    "[APP Titre court de l'app]\n<!DOCTYPE html>\n…\n[/APP]\n" +
+    "Avant le bloc, dis en deux ou trois phrases ce que fait l'app pis comment s'en servir. " +
+    "Pour changer une app déjà faite, réécris-la au complet dans un nouveau bloc [APP] avec " +
+    "le MÊME titre. " +
     `Date d'aujourd'hui : ${aujourdhui}.`;
 }
 
@@ -512,6 +521,7 @@ function ouvrirSession(id) {
     if (m.role === "user") doc.append(creer("p", "question", m.content));
     else {
       doc.append(creer("p", "reponse", m.content));
+      if (m.app) doc.append(carteApp(m.app));
       if (m.etapes?.length) doc.append(schema(m.etapes));
       if (m.sources?.length) doc.append(blocSources(m.sources));
     }
@@ -547,9 +557,110 @@ function sansReflexion(brut) {
     deviendra un schéma. Le texte final, lui, passe par extrairePlan(). */
 function texteVisible(brut, fini) {
   const t = sansReflexion(brut);
-  const plan = t.search(/\[PLAN/i);
-  if (plan >= 0) return t.slice(0, plan).trimEnd();
-  return fini ? t : t.slice(0, Math.max(0, t.length - 6));
+  // Le plan pis le code d'une app ne s'affichent pas en texte : ils ont leur carte à eux
+  const coupe = t.search(/\[PLAN|\[APP[\s\]:\-]|```[ \t]*html|<!doctype html/i);
+  if (coupe >= 0) return t.slice(0, coupe).trimEnd();
+  return fini ? t : t.slice(0, Math.max(0, t.length - 10));   // un « [APP » à moitié arrivé reste caché
+}
+
+/* ---------- Le Studio d'applications : l'IA construit une petite app, pis tu la vois ----------
+   L'app tourne dans un iframe « sandbox » SANS allow-same-origin : elle a une origine à elle,
+   vide. Faque le code écrit par l'IA peut PAS lire ta clé Claude ni ton token GitHub, gardés
+   dans ce navigateur. */
+const BAC_A_SABLE = "allow-scripts allow-forms allow-modals";
+
+function extraireApp(texte) {
+  let m = texte.match(/\[APP(?:[ \t:\-]+([^\]\n]*))?\][ \t]*\n?([\s\S]*?)(?:\[\/APP\]|$)/i);
+  let titre = "", html = "";
+  if (m) {
+    titre = (m[1] || "").trim(); html = m[2];
+  } else {
+    m = texte.match(/```(?:html|htm)?[ \t]*\n([\s\S]*?)(?:```|$)/i);
+    if (m && /<(!doctype|html|body)\b/i.test(m[1])) {
+      html = m[1];
+    } else {
+      m = texte.match(/<!doctype html[\s\S]*?(?:<\/html>|$)/i);
+      if (!m) return [texte, null];
+      html = m[0];
+    }
+  }
+  const reste = (texte.slice(0, m.index) + texte.slice(m.index + m[0].length)).trim();
+  html = html.replace(/^\s*```[\w-]*[ \t]*\n/, "").replace(/\n\s*```\s*$/, "").trim();
+  if (!/<[a-z!]/i.test(html)) return [texte, null];     // un bloc sans HTML : c'est pas une app
+  if (!titre) {
+    const t = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    titre = t ? t[1].replace(/\s+/g, " ").trim() : "";
+  }
+  return [reste, { titre: (titre || "Mon app").slice(0, 60), html: html + "\n" }];
+}
+
+const nomFichierApp = (titre) =>
+  (titre.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "app") + ".html";
+
+/** La carte du Studio : l'app qui tourne, pis de quoi la voir en grand, la garder, lire son code. */
+function carteApp(app, enDirect = false) {
+  const carte = creer("div", "studio-app");
+  const tete = creer("div", "studio-tete");
+  const titre = creer("span", "studio-titre", app.titre);
+  const etat = creer("span", "studio-etat", enDirect ? "L'app se construit…" : "");
+  tete.append(creer("strong", "", "Studio"), titre, etat);
+  const cadre = creer("iframe", "studio-apercu");
+  cadre.setAttribute("sandbox", BAC_A_SABLE);
+  cadre.setAttribute("title", "Aperçu de l'app");
+  cadre.srcdoc = app.html;
+  const code = creer("pre", "studio-code");
+  code.hidden = true;
+  code.textContent = app.html;
+  const boutons = creer("div", "studio-boutons");
+  const grand = creer("button", "bouton petit", "⛶ Plein écran");
+  const garder = creer("button", "bouton petit", "⤓ Télécharger");
+  const voirCode = creer("button", "bouton petit", "</> Code");
+  grand.type = garder.type = voirCode.type = "button";
+  grand.onclick = () => pleinEcranApp(carte.app);
+  garder.onclick = () => telechargerApp(carte.app);
+  voirCode.onclick = () => { code.hidden = !code.hidden; };
+  boutons.append(grand, garder, voirCode);
+  carte.append(tete, cadre, boutons, code);
+  carte.app = app;
+  /** Pendant que la réponse arrive : l'app se met à jour, au plus deux fois par seconde. */
+  let derniere = 0, enAttente = null;
+  carte.maj = (nouvelle, fini = false) => {
+    carte.app = nouvelle;
+    titre.textContent = nouvelle.titre;
+    code.textContent = nouvelle.html;
+    const poser = () => { derniere = Date.now(); enAttente = null; cadre.srcdoc = nouvelle.html; };
+    clearTimeout(enAttente);
+    if (fini || Date.now() - derniere > 500) poser();
+    else enAttente = setTimeout(poser, 500 - (Date.now() - derniere));
+    if (fini) etat.textContent = "";
+  };
+  return carte;
+}
+
+/** « Plein écran » : une fenêtre neuve qui contient le même cadre isolé.
+    (Pas d'adresse blob: : elle aurait l'origine du site, donc accès à tes clés.) */
+function pleinEcranApp(app) {
+  const f = window.open("", "_blank");
+  if (!f) { annoncer("Ton navigateur a bloqué la fenêtre. Permets les fenêtres pour ce site."); return; }
+  f.opener = null;                                     // l'app pourra pas toucher à cet onglet-ci
+  f.document.title = app.titre;
+  f.document.body.style.margin = "0";
+  const cadre = f.document.createElement("iframe");
+  cadre.setAttribute("sandbox", BAC_A_SABLE);
+  cadre.srcdoc = app.html;
+  cadre.style.cssText = "border:0;width:100vw;height:100vh;display:block";
+  f.document.body.append(cadre);
+}
+
+function telechargerApp(app) {
+  const lien = creer("a");
+  lien.href = URL.createObjectURL(new Blob([app.html], { type: "text/html" }));
+  lien.download = nomFichierApp(app.titre);
+  document.body.append(lien);
+  lien.click();
+  lien.remove();
+  setTimeout(() => URL.revokeObjectURL(lien.href), 5000);
 }
 
 /* ---------- La voix : l'IA lit ses réponses, dans le chat comme dans le Codex ----------
@@ -693,8 +804,13 @@ async function envoyer() {
   }, 400);
   occupe = true;
 
-  const envoyes = messages.map((m) => ({ role: m.role, content: m.content }));
+  // L'IA revoit le code de sa DERNIÈRE app pour pouvoir la modifier; les plus vieilles sont juste nommées
+  const derniereApp = messages.map((m) => !!m.app).lastIndexOf(true);
+  const envoyes = messages.map((m, i) => ({ role: m.role, content: !m.app ? m.content
+    : i === derniereApp ? `${m.content}\n[APP ${m.app.titre}]\n${m.app.html}[/APP]`
+    : `${m.content}\n(L'app « ${m.app.titre} » était ici.)` }));
   let para = null, curseur = null, brut = "", sources = [], erreur = null;
+  let studio = null;          // la carte de l'app, si l'IA en construit une
 
   const enlever = () => {
     clearInterval(minuterie);
@@ -715,6 +831,11 @@ async function envoyer() {
         }
         brut += ev.t;
         para.textContent = texteVisible(brut, false);
+        const [, enCours] = extraireApp(sansReflexion(brut));
+        if (enCours) {                      // on voit l'app se construire, en direct
+          if (!studio) { studio = carteApp(enCours, true); doc.insertBefore(studio, curseur); }
+          else studio.maj(enCours);
+        }
         doc.scrollTop = doc.scrollHeight;
       } else if (ev.type === "fin") {
         sources = ev.sources || [];
@@ -738,12 +859,19 @@ async function envoyer() {
   }
 
   // On garde le bloc [PLAN] ici : c'est extrairePlan qui le transforme en schéma.
-  const [texte, etapes] = extrairePlan(sansReflexion(brut).trim(), question);
+  const [sansApp, app] = extraireApp(sansReflexion(brut).trim());
+  const [texte, etapes] = extrairePlan(sansApp, question);
   if (!para) { para = creer("p", "reponse"); doc.append(para); }
-  para.textContent = texte || (etapes.length ? "Voici le plan :" : "Pas de réponse cette fois-ci.");
+  para.textContent = texte || (app ? "Voilà ton app :" : etapes.length ? "Voici le plan :"
+                                                         : "Pas de réponse cette fois-ci.");
+  if (app) {
+    if (!studio) { studio = carteApp(app); para.after(studio); }
+    studio.maj(app, true);
+  } else studio?.remove();
   if (etapes.length) doc.append(schema(etapes));
   if (sources.length) doc.append(blocSources(sources));
-  messages.push({ role: "assistant", content: para.textContent, etapes, sources });
+  messages.push({ role: "assistant", content: para.textContent, etapes, sources,
+                  ...(app ? { app } : {}) });
   parler(para.textContent);   // la réponse, lue à voix haute
   occupe = false;
   doc.scrollTop = doc.scrollHeight;
@@ -869,7 +997,7 @@ function dessinerModelesGratuits(installes = []) {
 }
 
 /* ---------- L'app : s'installer, pis se tenir à jour ---------- */
-const VERSION_APP = "2.4.0";
+const VERSION_APP = "2.5.0";
 let inviteInstall = null;      // le navigateur nous prête son « Installer »
 let rechargeFaite = false;
 
